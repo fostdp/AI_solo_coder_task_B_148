@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>古代水碓凸轮机构动力学仿真与舂捣力优化系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .header {
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            padding: 15px 30px;
+            border-bottom: 2px solid #e94560;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 22px;
+            background: linear-gradient(90deg, #e94560, #f39c12);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header .status {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4ade80;
+            box-shadow: 0 0 10px #4ade80;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.warning {
+            background: #f59e0b;
+            box-shadow: 0 0 10px #f59e0b;
+        }
+
+        .status-dot.critical {
+            background: #ef4444;
+            box-shadow: 0 0 10px #ef4444;
+            animation: pulse-fast 0.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes pulse-fast {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            grid-template-rows: auto auto;
+            gap: 15px;
+            padding: 15px;
+            height: calc(100vh - 60px);
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            backdrop-filter: blur(5px);
+        }
+
+        .panel h2 {
+            font-size: 16px;
+            color: #f39c12;
+            margin-bottom: 10px;
+            border-left: 3px solid #e94560;
+            padding-left: 10px;
+        }
+
+        .panel-3d {
+            grid-row: span 2;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #canvas-3d {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+        }
+
+        .cam-panel {
+            display: flex;
+            flex-direction: column;
+        }
+
+        #cam-canvas {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            width: 100%;
+        }
+
+        .chart-panel {
+            grid-column: 2;
+        }
+
+        #force-chart {
+            width: 100%;
+            height: 200px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+        }
+
+        .data-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .data-card {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .data-card .label {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        .data-card .value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #4ade80;
+        }
+
+        .data-card .unit {
+            font-size: 12px;
+            color: #888;
+            margin-left: 4px;
+        }
+
+        .data-card.warning .value {
+            color: #f59e0b;
+        }
+
+        .data-card.critical .value {
+            color: #ef4444;
+        }
+
+        .alerts-panel {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .alert-item {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+            animation: slideIn 0.3s ease;
+        }
+
+        .alert-item.warning {
+            background: rgba(245, 158, 11, 0.1);
+            border-color: rgba(245, 158, 11, 0.3);
+        }
+
+        .alert-item.info {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .alert-item .alert-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .alert-item .alert-type {
+            font-weight: bold;
+            font-size: 13px;
+        }
+
+        .alert-item .alert-time {
+            font-size: 11px;
+            color: #888;
+        }
+
+        .alert-item .alert-msg {
+            font-size: 12px;
+            color: #ccc;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .controls select,
+        .controls button {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #e0e0e0;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .controls button:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .controls button.primary {
+            background: #e94560;
+            border-color: #e94560;
+        }
+
+        .controls button.primary:hover {
+            background: #d63952;
+        }
+
+        .optimization-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .optimization-form label {
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        .optimization-form input {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: #e0e0e0;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+        }
+
+        .stat-item .stat-label {
+            font-size: 11px;
+            color: #888;
+        }
+
+        .stat-item .stat-value {
+            font-size: 16px;
+            color: #f39c12;
+            font-weight: bold;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        .tab-buttons {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #aaa;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .tab-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: white;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🏛️ 古代水碓凸轮机构动力学仿真与舂捣力优化系统</h1>
+        <div class="status">
+            <div class="status-item">
+                <div class="status-dot" id="connection-status"></div>
+                <span id="connection-text">系统运行中</span>
+            </div>
+            <div class="status-item">
+                <span>当前设备:</span>
+                <select id="device-select">
+                    <option value="shuidui-001">汉代一号水碓</option>
+                    <option value="shuidui-002">汉代二号水碓</option>
+                    <option value="shuidui-003">汉代三号水碓</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="panel panel-3d" id="panel-3d">
+            <h2>水碓三维模型</h2>
+            <canvas id="canvas-3d"></canvas>
+            <div class="stats-grid" style="position: absolute; bottom: 20px; left: 20px; right: 20px;">
+                <div class="stat-item">
+                    <div class="stat-label">凸轮转角</div>
+                    <div class="stat-value" id="cam-angle-display">0.0°</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">碓头位置</div>
+                    <div class="stat-value" id="duitou-position">0.00 m</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">水轮转速</div>
+                    <div class="stat-value" id="wheel-speed">0.00 rad/s</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">冲击能量</div>
+                    <div class="stat-value" id="impact-energy">0.00 J</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel cam-panel">
+            <h2>凸轮机构运动学</h2>
+            <div class="tab-buttons">
+                <button class="tab-btn active" data-tab="profile">轮廓曲线</button>
+                <button class="tab-btn" data-tab="velocity">速度曲线</button>
+                <button class="tab-btn" data-tab="acceleration">加速度曲线</button>
+            </div>
+            <canvas id="cam-canvas"></canvas>
+        </div>
+
+        <div class="panel chart-panel">
+            <h2>舂捣力动态柱状图</h2>
+            <canvas id="force-chart"></canvas>
+            <div class="data-panel" style="margin-top: 10px;">
+                <div class="data-card" id="force-card">
+                    <div class="label">瞬时舂捣力</div>
+                    <div class="value"><span id="pounding-force">0</span><span class="unit">N</span></div>
+                </div>
+                <div class="data-card" id="vibration-card">
+                    <div class="label">机架振动</div>
+                    <div class="value"><span id="vibration-value">0</span><span class="unit">m/s²</span></div>
+                </div>
+                <div class="data-card">
+                    <div class="label">脱壳率</div>
+                    <div class="value" style="color: #4ade80;"><span id="husking-rate">0</span><span class="unit">%</span></div>
+                </div>
+                <div class="data-card">
+                    <div class="label">破碎率</div>
+                    <div class="value" style="color: #f59e0b;"><span id="breakage-rate">0</span><span class="unit">%</span></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>舂捣力优化设计</h2>
+            <div class="controls">
+                <select id="grain-type">
+                    <option value="rice">水稻</option>
+                    <option value="millet">小米</option>
+                    <option value="wheat">小麦</option>
+                </select>
+                <button class="primary" id="btn-optimize">开始优化</button>
+            </div>
+            <div class="optimization-form">
+                <label>基圆半径(m)</label>
+                <input type="number" id="opt-base-radius" value="0.15" step="0.01" min="0.05" max="0.5">
+                <label>升程(m)</label>
+                <input type="number" id="opt-lift" value="0.12" step="0.01" min="0.02" max="0.3">
+                <label>最大压力角(°)</label>
+                <input type="number" id="opt-pressure-angle" value="30" step="1" min="10" max="60">
+                <label>目标效率</label>
+                <input type="number" id="opt-target-eff" value="0.85" step="0.01" min="0.5" max="0.99">
+            </div>
+            <div class="stats-grid" id="opt-results" style="display: none;">
+                <div class="stat-item">
+                    <div class="stat-label">优化后效率</div>
+                    <div class="stat-value" id="opt-efficiency">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">凸轮类型</div>
+                    <div class="stat-value" id="opt-profile-type">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">最优基圆</div>
+                    <div class="stat-value" id="opt-base-result">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">最优升程</div>
+                    <div class="stat-value" id="opt-lift-result">--</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel alerts-panel">
+            <h2>告警信息</h2>
+            <div id="alerts-list">
+                <div style="text-align: center; color: #666; padding: 20px;">
+                    暂无告警信息
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="./trip_hammer_3d.js"></script>
+    <script src="./cam_panel.js"></script>
+    <script>
+        const API_BASE = 'http://localhost:8080/api';
+        let camAngle = 0;
+
+        async function init() {
+            window.setApiBaseUrl(API_BASE);
+
+            await Promise.all([
+                window.initThreeScene('panel-3d'),
+                Promise.resolve(window.initCamPanel())
+            ]);
+
+            window.initCamCanvas();
+            window.initForceChart();
+
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const animResult = window.animateFrame({
+                camAngleDeg: camAngle,
+                deviceParams: window.deviceParams,
+                forceValue: 0,
+                huskingRate: 0
+            });
+
+            camAngle = animResult.nextAngle;
+
+            const instantaneousForce = 25 * 9.81 + Math.abs(Math.sin(camAngle * Math.PI / 90)) * 500;
+            window.addForceValue(instantaneousForce);
+
+            const dynamics = {
+                pounding_force: instantaneousForce,
+                impact_energy: 0.5 * 25 * Math.abs(Math.sin(camAngle * Math.PI / 180)) * 2,
+                husking_rate: 0.7 + Math.abs(Math.sin(camAngle * Math.PI / 180)) * 0.2,
+                breakage_rate: 0.05 + Math.abs(Math.sin(camAngle * Math.PI / 180)) * 0.08
+            };
+            window.updateDynamicsDisplay(dynamics);
+
+            if (animResult.shouldUpdateCharts) {
+                window.drawCamProfile();
+                window.drawForceChart();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
