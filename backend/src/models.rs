@@ -246,11 +246,44 @@ pub struct CrossEraComparisonResult {
     pub timestamp: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum FoundationType {
+    Soil,
+    ConcreteSlab,
+    ReinforcedConcrete,
+    PileFoundation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FoundationProperties {
+    pub foundation_type: FoundationType,
+    pub natural_frequency_hz: f64,
+    pub damping_ratio: f64,
+    pub stiffness_n_m: f64,
+    pub mass_kg: f64,
+    pub coupling_factor: f64,
+}
+
+impl Default for FoundationProperties {
+    fn default() -> Self {
+        FoundationProperties {
+            foundation_type: FoundationType::ConcreteSlab,
+            natural_frequency_hz: 8.0,
+            damping_ratio: 0.05,
+            stiffness_n_m: 5.0e7,
+            mass_kg: 10000.0,
+            coupling_factor: 0.7,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VibrationInterferenceRequest {
     pub device_ids: Vec<String>,
     pub simulation_duration_secs: f64,
     pub time_step_secs: f64,
+    #[serde(default)]
+    pub foundation: FoundationProperties,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +293,7 @@ pub struct DeviceVibrationState {
     pub position: (f64, f64),
     pub frequency: f64,
     pub amplitude: f64,
+    pub foundation_transmitted_amp: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -268,8 +302,10 @@ pub struct InterferencePoint {
     pub x: f64,
     pub y: f64,
     pub combined_vibration: f64,
+    pub foundation_vibration: f64,
     pub interference_factor: f64,
     pub is_resonance: bool,
+    pub is_foundation_coupled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,9 +313,12 @@ pub struct VibrationInterferenceResult {
     pub analysis_id: String,
     pub device_states: Vec<DeviceVibrationState>,
     pub time_series: Vec<InterferencePoint>,
+    pub foundation: FoundationProperties,
     pub max_interference: f64,
     pub avg_interference: f64,
+    pub max_foundation_vibration: f64,
     pub resonance_count: u32,
+    pub foundation_resonance_count: u32,
     pub safety_level: String,
     pub recommendation: String,
     pub timestamp: DateTime<Utc>,

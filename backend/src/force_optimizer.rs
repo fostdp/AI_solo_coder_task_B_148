@@ -118,7 +118,7 @@ impl ForceOptimizerService {
         request: VibrationInterferenceRequest,
         devices: Vec<(DeviceInfo, f64)>,
     ) -> VibrationInterferenceResult {
-        let analyzer = VibrationInterferenceAnalyzer::new(devices);
+        let analyzer = VibrationInterferenceAnalyzer::with_foundation(devices, request.foundation);
         analyzer.analyze(request.simulation_duration_secs, request.time_step_secs)
     }
 

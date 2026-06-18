@@ -436,6 +436,25 @@
             color: #000;
         }
 
+        .drawing-toolbar .tpl-btn {
+            background: rgba(251, 191, 36, 0.15);
+            border: 1px solid rgba(251, 191, 36, 0.4);
+            color: #fbbf24;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .drawing-toolbar .tpl-btn:hover {
+            background: rgba(251, 191, 36, 0.3);
+        }
+
+        .drawing-toolbar .tpl-btn.active {
+            background: #fbbf24;
+            color: #000;
+        }
+
         .comparison-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1002,23 +1021,28 @@
             <div class="tab-content" id="feature-design">
                 <h2>公众虚拟凸轮设计体验</h2>
                 <p style="color: #888; font-size: 13px; margin-bottom: 10px;">
-                    请在下方画布中绘制凸轮升程曲线（从左到右绘制），系统将自动评估您的设计效果！
+                    选择预设曲线类型，或拖拽画布上的 <span style="color: #fbbf24;">●</span> 控制点调整曲线形状。
                 </p>
-                <div class="drawing-toolbar">
-                    <input type="text" id="design-name" placeholder="给您的设计起个名字..." style="flex: 1; padding: 6px 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff;">
+                <div class="drawing-toolbar" style="flex-wrap: wrap; gap: 6px;">
+                    <input type="text" id="design-name" placeholder="设计名称..." style="flex: 1; min-width: 120px; padding: 6px 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff;">
                     <select id="design-grain">
                         <option value="rice">水稻</option>
                         <option value="millet">小米</option>
                         <option value="wheat">小麦</option>
                     </select>
-                    <button id="btn-clear-canvas">清除画布</button>
-                    <button id="btn-load-template">加载示例</button>
+                    <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+                        <button class="tpl-btn" data-tpl="harmonic">🌊 简谐</button>
+                        <button class="tpl-btn" data-tpl="cycloidal">🔄 摆线</button>
+                        <button class="tpl-btn" data-tpl="polynomial">📈 多项式</button>
+                        <button class="tpl-btn" data-tpl="arc">⭕ 圆弧</button>
+                    </div>
+                    <button id="btn-clear-canvas">重置控制点</button>
                     <button class="primary" id="btn-test-design">测试设计效果</button>
                 </div>
-                <canvas id="drawing-canvas" class="drawing-canvas"></canvas>
+                <canvas id="drawing-canvas" class="drawing-canvas" style="cursor: crosshair;"></canvas>
                 <div id="design-results" style="margin-top: 15px;">
                     <div style="text-align: center; color: #666; padding: 20px;">
-                        在画布上绘制曲线后点击"测试设计效果"查看评估结果
+                        选择预设曲线或调整控制点后点击"测试设计效果"查看评估结果
                     </div>
                 </div>
             </div>

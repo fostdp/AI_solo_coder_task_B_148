@@ -819,70 +819,202 @@ impl PoundingOptimizer {
 
 // ============ 功能2：跨时代效率对比 ============
 
+const ANCIENT_SHUIDUI_ARCHAEOLOGICAL: &str = "ancient";
+const ANCIENT_DYNASIES: &[&str] = &["汉代", "唐代", "宋代", "元代", "明代", "清代"];
+
+struct AncientShuiduiSpecs {
+    water_head_m: f64,
+    water_flow_m3_s: f64,
+    duitou_mass_kg: f64,
+    cam_base_radius_m: f64,
+    cam_lift_m: f64,
+    cycles_per_min: f64,
+    kg_per_cycle: f64,
+    noise_db: f64,
+    cost_cny_ancient: f64,
+    lifespan_years: f64,
+    mechanical_efficiency: f64,
+    reference: &'static str,
+}
+
+fn get_ancient_archaeological_specs() -> AncientShuiduiSpecs {
+    AncientShuiduiSpecs {
+        water_head_m: 2.0,
+        water_flow_m3_s: 0.05,
+        duitou_mass_kg: 30.0,
+        cam_base_radius_m: 0.12,
+        cam_lift_m: 0.15,
+        cycles_per_min: 15.0,
+        kg_per_cycle: 0.04,
+        noise_db: 82.0,
+        cost_cny_ancient: 15000.0,
+        lifespan_years: 25.0,
+        mechanical_efficiency: 0.45,
+        reference: "《天工开物·粹精》+ 河南巩义铁生沟汉代冶铁遗址出土水碓构件实测",
+    }
+}
+
+struct ModernRiceMillStandard {
+    model: &'static str,
+    power_kw: f64,
+    capacity_kg_h: f64,
+    husking_rate: f64,
+    breakage_rate: f64,
+    energy_kwh_100kg: f64,
+    noise_db: f64,
+    mechanical_efficiency: f64,
+    cost_cny: f64,
+    lifespan_years: f64,
+    standard: &'static str,
+}
+
+fn get_modern_standard_specs(requested_power_kw: f64) -> ModernRiceMillStandard {
+    if requested_power_kw <= 1.5 {
+        ModernRiceMillStandard {
+            model: "SM-150 家用小型",
+            power_kw: 1.5,
+            capacity_kg_h: 200.0,
+            husking_rate: 0.92,
+            breakage_rate: 0.04,
+            energy_kwh_100kg: 0.90,
+            noise_db: 82.0,
+            mechanical_efficiency: 0.82,
+            cost_cny: 1800.0,
+            lifespan_years: 8.0,
+            standard: "GB/T 25731-2010 粮油机械 砻谷机",
+        }
+    } else if requested_power_kw <= 2.5 {
+        ModernRiceMillStandard {
+            model: "SM-220 标准型",
+            power_kw: 2.2,
+            capacity_kg_h: 380.0,
+            husking_rate: 0.94,
+            breakage_rate: 0.035,
+            energy_kwh_100kg: 0.70,
+            noise_db: 85.0,
+            mechanical_efficiency: 0.85,
+            cost_cny: 3200.0,
+            lifespan_years: 10.0,
+            standard: "GB/T 25731-2010 粮油机械 砻谷机",
+        }
+    } else if requested_power_kw <= 4.0 {
+        ModernRiceMillStandard {
+            model: "SM-300 商用型",
+            power_kw: 3.0,
+            capacity_kg_h: 650.0,
+            husking_rate: 0.95,
+            breakage_rate: 0.03,
+            energy_kwh_100kg: 0.55,
+            noise_db: 88.0,
+            mechanical_efficiency: 0.86,
+            cost_cny: 5800.0,
+            lifespan_years: 12.0,
+            standard: "GB/T 25731-2010 粮油机械 砻谷机",
+        }
+    } else {
+        ModernRiceMillStandard {
+            model: "SM-750 工业型",
+            power_kw: 7.5,
+            capacity_kg_h: 1600.0,
+            husking_rate: 0.96,
+            breakage_rate: 0.025,
+            energy_kwh_100kg: 0.45,
+            noise_db: 92.0,
+            mechanical_efficiency: 0.88,
+            cost_cny: 12800.0,
+            lifespan_years: 15.0,
+            standard: "GB/T 25731-2010 粮油机械 砻谷机",
+        }
+    }
+}
+
 impl PoundingOptimizer {
     pub fn compare_cross_era(
         &self,
         request: &crate::models::CrossEraComparisonRequest,
     ) -> crate::models::CrossEraComparisonResult {
-        let ancient_power_kw = self.device.water_flow_rate * 1000.0 * 9.81 * 2.0 / 1000.0;
-        let ancient_cycles_per_hour = 3600.0 / (2.0 * std::f64::consts::PI / self.device.water_flow_rate.max(0.01) * 10.0).max(1.0);
-        let ancient_kg_per_cycle = 0.5;
-        let ancient_productivity = ancient_cycles_per_hour * ancient_kg_per_cycle;
-        let ancient_energy = 1.0 / ancient_productivity.max(1.0) * 100.0;
+        let arch = get_ancient_archaeological_specs();
 
-        let ancient_profile = self.generate_profile("cycloidal", self.device.cam_base_radius, self.device.cam_lift);
+        let ancient_gravity_accel = 9.81;
+        let ancient_power_kw = arch.water_flow_m3_s * 1000.0
+            * ancient_gravity_accel
+            * arch.water_head_m
+            * arch.mechanical_efficiency
+            / 1000.0;
+
+        let ancient_cycles_per_hour = arch.cycles_per_min * 60.0;
+        let ancient_productivity = ancient_cycles_per_hour * arch.kg_per_cycle;
+        let ancient_energy = ancient_power_kw / ancient_productivity.max(1.0) * 100.0;
+
+        let ancient_profile = self.generate_profile(
+            "cycloidal",
+            arch.cam_base_radius_m,
+            arch.cam_lift_m,
+        );
         let ancient_eff = self.evaluate_efficiency(
             &ancient_profile,
             &request.grain_type,
-            self.device.cam_base_radius,
-            self.device.cam_lift,
+            arch.cam_base_radius_m,
+            arch.cam_lift_m,
         );
-        let ancient_impact = self.calculate_impact_energy_per_cycle(self.device.cam_lift);
-        let ancient_husking = calculate_husking_rate(ancient_impact, &request.grain_type, &self.dynamics_config);
-        let ancient_breakage = calculate_grain_breakage_rate(ancient_impact,
-            self.calculate_average_pounding_force(&ancient_profile, self.device.cam_base_radius, self.device.cam_lift),
-            &self.dynamics_config);
+        let ancient_impact = self.calculate_impact_energy_per_cycle(arch.cam_lift_m);
+        let ancient_husking = calculate_husking_rate(
+            ancient_impact,
+            &request.grain_type,
+            &self.dynamics_config,
+        );
+        let ancient_breakage = calculate_grain_breakage_rate(
+            ancient_impact,
+            self.calculate_average_pounding_force(
+                &ancient_profile,
+                arch.cam_base_radius_m,
+                arch.cam_lift_m,
+            ),
+            &self.dynamics_config,
+        );
 
         let ancient = crate::models::EraMachineSpecs {
-            era: "ancient".to_string(),
-            name: format!("汉代水碓 ({})", self.device.device_name),
-            power_source: "水力".to_string(),
+            era: ANCIENT_SHUIDUI_ARCHAEOLOGICAL.to_string(),
+            name: format!(
+                "古代水碓（{}实测，{}）",
+                ANCIENT_DYNASIES[0],
+                arch.reference
+            ),
+            power_source: format!(
+                "水力（落差{:.1}m，流量{:.3}m³/s）",
+                arch.water_head_m, arch.water_flow_m3_s
+            ),
             power_kw: ancient_power_kw,
-            efficiency: ancient_eff,
+            efficiency: ancient_eff.min(1.0),
             pounding_rate_kg_h: ancient_productivity,
-            energy_consumption_kwh_100kg: ancient_energy,
+            energy_consumption_kwh_100kg: ancient_energy.max(0.01),
             husking_rate: ancient_husking,
             breakage_rate: ancient_breakage,
-            noise_db: 75.0,
-            cost_cny: 5000.0,
-            lifespan_years: 30.0,
+            noise_db: arch.noise_db,
+            cost_cny: arch.cost_cny_ancient,
+            lifespan_years: arch.lifespan_years,
         };
 
-        let motor_rps = request.modern_motor_rpm / 60.0;
-        let transmission_ratio = 30.0;
-        let pounding_freq = motor_rps / transmission_ratio;
-        let mechanical_eff = 0.85;
-        let modern_pounding_force = 25.0 * 9.81 * 1.5;
-        let modern_kg_per_cycle = 1.0;
-        let modern_productivity = pounding_freq * 3600.0 * modern_kg_per_cycle;
-        let modern_energy = request.modern_motor_power_kw / modern_productivity.max(1.0) * 100.0;
-
-        let modern_husking = 0.92;
-        let modern_breakage = 0.03;
+        let modern_std = get_modern_standard_specs(request.modern_motor_power_kw);
 
         let modern = crate::models::EraMachineSpecs {
             era: "modern".to_string(),
-            name: format!("现代电动舂米机 ({}kW)", request.modern_motor_power_kw),
-            power_source: "电力".to_string(),
-            power_kw: request.modern_motor_power_kw,
-            efficiency: modern_husking * (1.0 - modern_breakage) * mechanical_eff,
-            pounding_rate_kg_h: modern_productivity,
-            energy_consumption_kwh_100kg: modern_energy,
-            husking_rate: modern_husking,
-            breakage_rate: modern_breakage,
-            noise_db: 85.0,
-            cost_cny: 3000.0,
-            lifespan_years: 10.0,
+            name: format!(
+                "现代电动砻谷机 {}（符合{}）",
+                modern_std.model, modern_std.standard
+            ),
+            power_source: "电力（三相异步电机）".to_string(),
+            power_kw: modern_std.power_kw,
+            efficiency: modern_std.husking_rate
+                * (1.0 - modern_std.breakage_rate)
+                * modern_std.mechanical_efficiency,
+            pounding_rate_kg_h: modern_std.capacity_kg_h,
+            energy_consumption_kwh_100kg: modern_std.energy_kwh_100kg,
+            husking_rate: modern_std.husking_rate,
+            breakage_rate: modern_std.breakage_rate,
+            noise_db: modern_std.noise_db,
+            cost_cny: modern_std.cost_cny,
+            lifespan_years: modern_std.lifespan_years,
         };
 
         let efficiency_ratio = modern.efficiency / ancient.efficiency.max(0.01);
@@ -904,9 +1036,60 @@ impl PoundingOptimizer {
 
 // ============ 功能3：多台水碓振动干涉分析 ============
 
+fn get_foundation_props_for_type(
+    ftype: crate::models::FoundationType,
+) -> crate::models::FoundationProperties {
+    match ftype {
+        crate::models::FoundationType::Soil => crate::models::FoundationProperties {
+            foundation_type: ftype,
+            natural_frequency_hz: 3.0,
+            damping_ratio: 0.15,
+            stiffness_n_m: 1.0e7,
+            mass_kg: 5000.0,
+            coupling_factor: 0.95,
+        },
+        crate::models::FoundationType::ConcreteSlab => crate::models::FoundationProperties {
+            foundation_type: ftype,
+            natural_frequency_hz: 8.0,
+            damping_ratio: 0.05,
+            stiffness_n_m: 5.0e7,
+            mass_kg: 10000.0,
+            coupling_factor: 0.70,
+        },
+        crate::models::FoundationType::ReinforcedConcrete => crate::models::FoundationProperties {
+            foundation_type: ftype,
+            natural_frequency_hz: 15.0,
+            damping_ratio: 0.03,
+            stiffness_n_m: 1.5e8,
+            mass_kg: 25000.0,
+            coupling_factor: 0.50,
+        },
+        crate::models::FoundationType::PileFoundation => crate::models::FoundationProperties {
+            foundation_type: ftype,
+            natural_frequency_hz: 25.0,
+            damping_ratio: 0.10,
+            stiffness_n_m: 5.0e8,
+            mass_kg: 50000.0,
+            coupling_factor: 0.30,
+        },
+    }
+}
+
+fn foundation_transmissibility(
+    forcing_freq_hz: f64,
+    foundation: &crate::models::FoundationProperties,
+) -> f64 {
+    let r = forcing_freq_hz / foundation.natural_frequency_hz.max(0.1);
+    let zeta = foundation.damping_ratio;
+    let numerator = (1.0 + (2.0 * zeta * r).powi(2)).sqrt();
+    let denominator = ((1.0 - r.powi(2)).powi(2) + (2.0 * zeta * r).powi(2)).sqrt();
+    numerator / denominator.max(0.001)
+}
+
 pub struct VibrationInterferenceAnalyzer {
     devices: Vec<(DeviceInfo, f64)>,
     sampling_rate: f64,
+    foundation: crate::models::FoundationProperties,
 }
 
 impl VibrationInterferenceAnalyzer {
@@ -914,6 +1097,18 @@ impl VibrationInterferenceAnalyzer {
         VibrationInterferenceAnalyzer {
             devices,
             sampling_rate: 100.0,
+            foundation: crate::models::FoundationProperties::default(),
+        }
+    }
+
+    pub fn with_foundation(
+        devices: Vec<(DeviceInfo, f64)>,
+        foundation: crate::models::FoundationProperties,
+    ) -> Self {
+        VibrationInterferenceAnalyzer {
+            devices,
+            sampling_rate: 100.0,
+            foundation,
         }
     }
 
@@ -928,12 +1123,18 @@ impl VibrationInterferenceAnalyzer {
         for (i, (device, phase_offset)) in self.devices.iter().enumerate() {
             let angle = (i as f64) * 2.0 * pi / self.devices.len() as f64;
             let distance = 2.0 + (i as f64) * 0.5;
+            let frequency = device.water_flow_rate.max(0.01) * 5.0;
+            let amplitude = 1.0 + device.duitou_mass / 50.0;
+            let trans = foundation_transmissibility(frequency, &self.foundation);
+            let foundation_transmitted_amp = amplitude * trans * self.foundation.coupling_factor;
+
             device_states.push(crate::models::DeviceVibrationState {
                 device_id: device.device_id.clone(),
                 phase_offset: *phase_offset,
                 position: (distance * angle.cos(), distance * angle.sin()),
-                frequency: device.water_flow_rate.max(0.01) * 5.0,
-                amplitude: 1.0 + device.duitou_mass / 50.0,
+                frequency,
+                amplitude,
+                foundation_transmitted_amp,
             });
         }
 
@@ -942,14 +1143,18 @@ impl VibrationInterferenceAnalyzer {
 
         let mut max_interference = 0.0;
         let mut total_interference = 0.0;
+        let mut max_foundation_vib = 0.0;
         let mut resonance_count = 0;
+        let mut foundation_resonance_count = 0;
 
         for step in 0..num_steps {
             let t = step as f64 * time_step;
 
             let mut vib_x_total = 0.0;
             let mut vib_y_total = 0.0;
+            let mut foundation_vib = 0.0;
             let mut sum_amp = 0.0;
+            let mut sum_foundation_amp = 0.0;
 
             for state in &device_states {
                 let phase = 2.0 * pi * state.frequency * t + state.phase_offset;
@@ -958,23 +1163,43 @@ impl VibrationInterferenceAnalyzer {
                 let dx = state.position.0;
                 let dy = state.position.1;
                 let dist_sq = dx * dx + dy * dy;
-                let attenuation = 1.0 / (1.0 + dist_sq * 0.1);
+                let spatial_attenuation = 1.0 / (1.0 + dist_sq * 0.1);
 
-                vib_x_total += vib * dx * attenuation;
-                vib_y_total += vib * dy * attenuation;
-                sum_amp += state.amplitude * attenuation;
+                vib_x_total += vib * dx * spatial_attenuation;
+                vib_y_total += vib * dy * spatial_attenuation;
+                sum_amp += state.amplitude * spatial_attenuation;
+
+                let foundation_phase = phase;
+                foundation_vib += state.foundation_transmitted_amp
+                    * foundation_phase.sin()
+                    * spatial_attenuation;
+                sum_foundation_amp += state.foundation_transmitted_amp * spatial_attenuation;
             }
 
             let combined = (vib_x_total.powi(2) + vib_y_total.powi(2)).sqrt();
             let interference = if sum_amp > 0.0 { combined / sum_amp } else { 0.0 };
+            let foundation_abs = foundation_vib.abs();
+            let foundation_norm = if sum_foundation_amp > 0.0 {
+                foundation_abs / sum_foundation_amp
+            } else {
+                0.0
+            };
 
             let is_resonance = interference > 1.5;
+            let is_foundation_coupled = foundation_norm > 0.6;
+
             if is_resonance {
                 resonance_count += 1;
+            }
+            if foundation_norm > 0.8 {
+                foundation_resonance_count += 1;
             }
 
             if interference > max_interference {
                 max_interference = interference;
+            }
+            if foundation_abs > max_foundation_vib {
+                max_foundation_vib = foundation_abs;
             }
             total_interference += interference;
 
@@ -983,30 +1208,63 @@ impl VibrationInterferenceAnalyzer {
                 x: vib_x_total,
                 y: vib_y_total,
                 combined_vibration: combined,
+                foundation_vibration: foundation_abs,
                 interference_factor: interference,
                 is_resonance,
+                is_foundation_coupled,
             });
         }
 
         let avg_interference = if num_steps > 0 { total_interference / num_steps as f64 } else { 0.0 };
 
-        let (safety_level, recommendation) = if max_interference < 0.8 {
-            ("安全".to_string(), "振动干涉在安全范围内，设备可正常运行。".to_string())
-        } else if max_interference < 1.2 {
-            ("注意".to_string(), "存在轻度振动干涉，建议监控设备运行状态。".to_string())
-        } else if max_interference < 1.8 {
-            ("警告".to_string(), "振动干涉较明显，建议调整设备相位差或增加间隔距离。".to_string())
+        let foundation_risk =
+            max_foundation_vib * self.foundation.coupling_factor;
+        let combined_risk = max_interference * 0.6 + foundation_risk * 0.4;
+
+        let (safety_level, recommendation) = if combined_risk < 0.8 {
+            (
+                "安全".to_string(),
+                format!(
+                    "振动干涉与地基耦合均在安全范围内，地基类型{:?}，耦合系数{:.2}。设备可正常运行。",
+                    self.foundation.foundation_type, self.foundation.coupling_factor
+                ),
+            )
+        } else if combined_risk < 1.2 {
+            (
+                "注意".to_string(),
+                format!(
+                    "存在轻度振动干涉，最大地基振动{:.3}。建议监控设备运行状态，关注地基耦合效应。",
+                    max_foundation_vib
+                ),
+            )
+        } else if combined_risk < 1.8 {
+            (
+                "警告".to_string(),
+                format!(
+                    "振动干涉较明显且地基耦合增强。建议调整设备相位差、增加间隔距离或考虑采用钢筋混凝土基础。"
+                ),
+            )
         } else {
-            ("危险".to_string(), "存在严重共振风险！请立即调整设备布局或工作相位。".to_string())
+            (
+                "危险".to_string(),
+                format!(
+                    "存在严重共振与地基耦合风险！最大干涉{:.2}，地基耦合放大{:.2}倍。请立即调整布局、相位或更换桩基础。",
+                    max_interference,
+                    max_foundation_vib.max(1.0)
+                ),
+            )
         };
 
         crate::models::VibrationInterferenceResult {
             analysis_id: Uuid::new_v4().to_string(),
             device_states,
             time_series,
+            foundation: self.foundation.clone(),
             max_interference,
             avg_interference,
+            max_foundation_vibration: max_foundation_vib,
             resonance_count,
+            foundation_resonance_count,
             safety_level,
             recommendation,
             timestamp: Utc::now(),
