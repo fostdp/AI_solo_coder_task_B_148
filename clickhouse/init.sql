@@ -109,6 +109,140 @@ INSERT INTO devices (device_id, device_name, location, installation_date, cam_ba
 ('shuidui-002', '汉代二号水碓', '陕西西安考古现场', '2024-06-20', 0.18, 0.15, 32.0, 0.06, 5.0, true),
 ('shuidui-003', '汉代三号水碓', '四川成都考古现场', '2024-09-10', 0.12, 0.10, 20.0, 0.04, 5.0, true);
 
+-- ============ 新功能表：凸轮效率对比结果 ============
+CREATE TABLE IF NOT EXISTS cam_profile_comparison_results (
+    comparison_id String,
+    device_id String,
+    grain_type String,
+    best_profile String,
+    profile_types Array(String),
+    profile_names Array(String),
+    efficiencies Array(Float64),
+    husking_rates Array(Float64),
+    breakage_rates Array(Float64),
+    pounding_forces Array(Float64),
+    impact_energies Array(Float64),
+    max_jerks Array(Float64),
+    pressure_angles Array(Float64),
+    min_curvatures Array(Float64),
+    manufacturing_costs Array(Float64),
+    scores Array(Float64),
+    timestamp DateTime64(9, 'UTC') DEFAULT now64(9)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (device_id, timestamp)
+TTL timestamp + INTERVAL 2 YEAR
+COMMENT '凸轮形状效率对比结果表';
+
+-- ============ 新功能表：跨时代效率对比结果 ============
+CREATE TABLE IF NOT EXISTS cross_era_comparison_results (
+    comparison_id String,
+    grain_type String,
+    ancient_name String,
+    ancient_power_kw Float64,
+    ancient_efficiency Float64,
+    ancient_pounding_rate_kg_h Float64,
+    ancient_energy_kwh_100kg Float64,
+    ancient_husking_rate Float64,
+    ancient_breakage_rate Float64,
+    ancient_noise_db Float64,
+    ancient_cost_cny Float64,
+    ancient_lifespan_years Float64,
+    modern_name String,
+    modern_power_kw Float64,
+    modern_efficiency Float64,
+    modern_pounding_rate_kg_h Float64,
+    modern_energy_kwh_100kg Float64,
+    modern_husking_rate Float64,
+    modern_breakage_rate Float64,
+    modern_noise_db Float64,
+    modern_cost_cny Float64,
+    modern_lifespan_years Float64,
+    efficiency_ratio Float64,
+    productivity_ratio Float64,
+    energy_ratio Float64,
+    timestamp DateTime64(9, 'UTC') DEFAULT now64(9)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp)
+TTL timestamp + INTERVAL 3 YEAR
+COMMENT '古今跨时代效率对比结果表';
+
+-- ============ 新功能表：振动干涉分析结果 ============
+CREATE TABLE IF NOT EXISTS vibration_interference_results (
+    analysis_id String,
+    device_ids Array(String),
+    device_phases Array(Float64),
+    device_positions_x Array(Float64),
+    device_positions_y Array(Float64),
+    device_frequencies Array(Float64),
+    device_amplitudes Array(Float64),
+    max_interference Float64,
+    avg_interference Float64,
+    resonance_count UInt32,
+    safety_level String,
+    recommendation String,
+    timestamp DateTime64(9, 'UTC') DEFAULT now64(9)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp)
+TTL timestamp + INTERVAL 1 YEAR
+COMMENT '多台水碓振动干涉分析结果表';
+
+-- ============ 新功能表：用户凸轮设计体验结果 ============
+CREATE TABLE IF NOT EXISTS user_cam_design_results (
+    design_id String,
+    design_name String,
+    user_id Nullable(String),
+    grain_type String,
+    base_radius Float64,
+    overall_efficiency Float64,
+    husking_rate Float64,
+    breakage_rate Float64,
+    pounding_force Float64,
+    impact_energy Float64,
+    overall_score Float64,
+    grade String,
+    design_feedback Array(String),
+    safety_warnings Array(String),
+    tolerance_min_curvature Float64,
+    tolerance_feasibility Float64,
+    tolerance_manufacturing_cost Float64,
+    user_defined_lifts Array(Float64),
+    timestamp DateTime64(9, 'UTC') DEFAULT now64(9)
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (timestamp)
+TTL timestamp + INTERVAL 5 YEAR
+COMMENT '公众虚拟凸轮设计体验结果表';
+
+-- ============ 新功能表：现代电动舂米机规格 ============
+CREATE TABLE IF NOT EXISTS modern_rice_mill_specs (
+    spec_id String,
+    model_name String,
+    power_kw Float64,
+    motor_rpm Float64,
+    transmission_ratio Float64,
+    mechanical_efficiency Float64,
+    typical_husking_rate Float64,
+    typical_breakage_rate Float64,
+    price_cny Float64,
+    manufacturer String,
+    create_time DateTime64(9, 'UTC') DEFAULT now64(9)
+) ENGINE = ReplacingMergeTree(create_time)
+ORDER BY spec_id
+TTL create_time + INTERVAL 10 YEAR
+COMMENT '现代电动舂米机规格参数表';
+
+INSERT INTO modern_rice_mill_specs (
+    spec_id, model_name, power_kw, motor_rpm, transmission_ratio,
+    mechanical_efficiency, typical_husking_rate, typical_breakage_rate,
+    price_cny, manufacturer
+) VALUES
+('mill-001', '家庭小型电动舂米机', 1.5, 1450, 30.0, 0.82, 0.90, 0.04, 1500.0, '国产农机'),
+('mill-002', '中型商用电动舂米机', 3.0, 1450, 25.0, 0.85, 0.93, 0.03, 3500.0, '国产农机'),
+('mill-003', '大型工业电动舂米机', 7.5, 960, 20.0, 0.88, 0.95, 0.025, 8000.0, '合资品牌');
+
 -- 创建物化视图：每分钟统计
 CREATE MATERIALIZED VIEW IF NOT EXISTS sensor_stats_1min
 ENGINE = SummingMergeTree()

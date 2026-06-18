@@ -1,6 +1,10 @@
 use crate::models::{
     SensorData, DynamicsResult, Alert, DeviceInfo,
     OptimizationRequest, OptimizationResult,
+    CamProfileComparisonRequest, CamProfileComparisonResult,
+    CrossEraComparisonRequest, CrossEraComparisonResult,
+    VibrationInterferenceRequest, VibrationInterferenceResult,
+    UserCamDesignRequest, UserCamDesignResult,
 };
 use crate::clickhouse_client::ClickHouseClient;
 use crate::message_bus::{SimulatorCmdTx, OptimizerCmdTx, AlarmCmdTx, SimulatorCommand, OptimizerCommand};
@@ -11,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, oneshot};
 use warp::Filter;
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::{error, warn, info};
 use futures_util::StreamExt;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,6 +142,34 @@ impl ApiServer {
             .and(with_sim_tx(sim_cmd_tx.clone()))
             .and_then(handle_simulate);
 
+        let compare_profiles_route = warp::path!("api" / "compare" / "cam-profiles")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(with_clickhouse(clickhouse.clone()))
+            .and(with_opt_tx(opt_cmd_tx.clone()))
+            .and_then(handle_compare_profiles);
+
+        let compare_cross_era_route = warp::path!("api" / "compare" / "cross-era")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(with_clickhouse(clickhouse.clone()))
+            .and(with_opt_tx(opt_cmd_tx.clone()))
+            .and_then(handle_compare_cross_era);
+
+        let analyze_vibration_route = warp::path!("api" / "vibration" / "interference")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(with_clickhouse(clickhouse.clone()))
+            .and(with_opt_tx(opt_cmd_tx.clone()))
+            .and_then(handle_analyze_vibration);
+
+        let test_user_cam_route = warp::path!("api" / "user-cam" / "test")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(with_clickhouse(clickhouse.clone()))
+            .and(with_opt_tx(opt_cmd_tx.clone()))
+            .and_then(handle_test_user_cam);
+
         let metrics_route = warp::path!("metrics")
             .and(warp::get())
             .map(|| {
@@ -158,6 +190,10 @@ impl ApiServer {
             .or(optimize_route)
             .or(cam_profile_route)
             .or(simulate_route)
+            .or(compare_profiles_route)
+            .or(compare_cross_era_route)
+            .or(analyze_vibration_route)
+            .or(test_user_cam_route)
             .or(ws_route)
             .or(metrics_route)
             .with(cors)
@@ -463,6 +499,245 @@ async fn handle_simulate(
             message: Some("Device not found".to_string()),
         })),
         Err(e) => Ok(warp::reply::json(&ApiResponse::<DynamicsResult> {
+            success: false,
+            data: None,
+            message: Some(e.to_string()),
+        })),
+    }
+}
+
+async fn handle_compare_profiles(
+    request: CamProfileComparisonRequest,
+    clickhouse: Arc<ClickHouseClient>,
+    opt_cmd_tx: OptimizerCmdTx,
+) -> Result<impl warp::Reply, Infallible> {
+    let device_id = request.device_id.clone();
+    info!("Cam profile comparison requested for device: {}", device_id);
+    match clickhouse.get_device_info(&device_id).await {
+        Ok(Some(device)) => {
+            let (tx, rx) = oneshot::channel();
+            let cmd = OptimizerCommand::CompareProfiles {
+                request,
+                device,
+                reply: tx,
+            };
+
+            if opt_cmd_tx.send(cmd).is_err() {
+                return Ok(warp::reply::json(&ApiResponse::<CamProfileComparisonResult> {
+                    success: false,
+                    data: None,
+                    message: Some("Optimization service unavailable".to_string()),
+                }));
+            }
+
+            match rx.await {
+                Ok(result) => {
+                    if let Err(e) = clickhouse.insert_cam_comparison_result(&result).await {
+                        error!("Failed to persist cam comparison result: {}", e);
+                    }
+                    Ok(warp::reply::json(&ApiResponse {
+                        success: true,
+                        data: Some(result),
+                        message: None,
+                    }))
+                }
+                Err(e) => Ok(warp::reply::json(&ApiResponse::<CamProfileComparisonResult> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Comparison cancelled: {}", e)),
+                })),
+            }
+        }
+        Ok(None) => Ok(warp::reply::json(&ApiResponse::<CamProfileComparisonResult> {
+            success: false,
+            data: None,
+            message: Some("Device not found".to_string()),
+        })),
+        Err(e) => Ok(warp::reply::json(&ApiResponse::<CamProfileComparisonResult> {
+            success: false,
+            data: None,
+            message: Some(e.to_string()),
+        })),
+    }
+}
+
+async fn handle_compare_cross_era(
+    request: CrossEraComparisonRequest,
+    clickhouse: Arc<ClickHouseClient>,
+    opt_cmd_tx: OptimizerCmdTx,
+) -> Result<impl warp::Reply, Infallible> {
+    let device_id = request.ancient_device_id.clone();
+    info!("Cross-era comparison requested for device: {}", device_id);
+    match clickhouse.get_device_info(&device_id).await {
+        Ok(Some(device)) => {
+            let (tx, rx) = oneshot::channel();
+            let cmd = OptimizerCommand::CompareCrossEra {
+                request,
+                device,
+                reply: tx,
+            };
+
+            if opt_cmd_tx.send(cmd).is_err() {
+                return Ok(warp::reply::json(&ApiResponse::<CrossEraComparisonResult> {
+                    success: false,
+                    data: None,
+                    message: Some("Optimization service unavailable".to_string()),
+                }));
+            }
+
+            match rx.await {
+                Ok(result) => {
+                    if let Err(e) = clickhouse.insert_cross_era_result(&result).await {
+                        error!("Failed to persist cross-era result: {}", e);
+                    }
+                    Ok(warp::reply::json(&ApiResponse {
+                        success: true,
+                        data: Some(result),
+                        message: None,
+                    }))
+                }
+                Err(e) => Ok(warp::reply::json(&ApiResponse::<CrossEraComparisonResult> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Comparison cancelled: {}", e)),
+                })),
+            }
+        }
+        Ok(None) => Ok(warp::reply::json(&ApiResponse::<CrossEraComparisonResult> {
+            success: false,
+            data: None,
+            message: Some("Device not found".to_string()),
+        })),
+        Err(e) => Ok(warp::reply::json(&ApiResponse::<CrossEraComparisonResult> {
+            success: false,
+            data: None,
+            message: Some(e.to_string()),
+        })),
+    }
+}
+
+async fn handle_analyze_vibration(
+    request: VibrationInterferenceRequest,
+    clickhouse: Arc<ClickHouseClient>,
+    opt_cmd_tx: OptimizerCmdTx,
+) -> Result<impl warp::Reply, Infallible> {
+    info!("Vibration interference analysis requested for {} devices", request.device_ids.len());
+
+    let mut devices_with_phases = Vec::new();
+    for (i, device_id) in request.device_ids.iter().enumerate() {
+        match clickhouse.get_device_info(device_id).await {
+            Ok(Some(device)) => {
+                let phase = (i as f64) * 2.0 * std::f64::consts::PI / request.device_ids.len() as f64;
+                devices_with_phases.push((device, phase));
+            }
+            Ok(None) => {
+                return Ok(warp::reply::json(&ApiResponse::<VibrationInterferenceResult> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Device {} not found", device_id)),
+                }));
+            }
+            Err(e) => {
+                return Ok(warp::reply::json(&ApiResponse::<VibrationInterferenceResult> {
+                    success: false,
+                    data: None,
+                    message: Some(e.to_string()),
+                }));
+            }
+        }
+    }
+
+    if devices_with_phases.is_empty() {
+        return Ok(warp::reply::json(&ApiResponse::<VibrationInterferenceResult> {
+            success: false,
+            data: None,
+            message: Some("No valid devices provided".to_string()),
+        }));
+    }
+
+    let (tx, rx) = oneshot::channel();
+    let cmd = OptimizerCommand::AnalyzeVibration {
+        request,
+        devices: devices_with_phases,
+        reply: tx,
+    };
+
+    if opt_cmd_tx.send(cmd).is_err() {
+        return Ok(warp::reply::json(&ApiResponse::<VibrationInterferenceResult> {
+            success: false,
+            data: None,
+            message: Some("Optimization service unavailable".to_string()),
+        }));
+    }
+
+    match rx.await {
+        Ok(result) => {
+            if let Err(e) = clickhouse.insert_vibration_interference_result(&result).await {
+                error!("Failed to persist vibration interference result: {}", e);
+            }
+            Ok(warp::reply::json(&ApiResponse {
+                success: true,
+                data: Some(result),
+                message: None,
+            }))
+        }
+        Err(e) => Ok(warp::reply::json(&ApiResponse::<VibrationInterferenceResult> {
+            success: false,
+            data: None,
+            message: Some(format!("Analysis cancelled: {}", e)),
+        })),
+    }
+}
+
+async fn handle_test_user_cam(
+    request: UserCamDesignRequest,
+    clickhouse: Arc<ClickHouseClient>,
+    opt_cmd_tx: OptimizerCmdTx,
+) -> Result<impl warp::Reply, Infallible> {
+    info!("User cam design test requested: {:?}", request.design_name);
+
+    let default_device_id = "shuidui-001".to_string();
+    match clickhouse.get_device_info(&default_device_id).await {
+        Ok(Some(device)) => {
+            let (tx, rx) = oneshot::channel();
+            let cmd = OptimizerCommand::TestUserCam {
+                request,
+                device,
+                reply: tx,
+            };
+
+            if opt_cmd_tx.send(cmd).is_err() {
+                return Ok(warp::reply::json(&ApiResponse::<UserCamDesignResult> {
+                    success: false,
+                    data: None,
+                    message: Some("Optimization service unavailable".to_string()),
+                }));
+            }
+
+            match rx.await {
+                Ok(result) => {
+                    if let Err(e) = clickhouse.insert_user_cam_design_result(&result).await {
+                        error!("Failed to persist user cam design result: {}", e);
+                    }
+                    Ok(warp::reply::json(&ApiResponse {
+                        success: true,
+                        data: Some(result),
+                        message: None,
+                    }))
+                }
+                Err(e) => Ok(warp::reply::json(&ApiResponse::<UserCamDesignResult> {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Test cancelled: {}", e)),
+                })),
+            }
+        }
+        Ok(None) => Ok(warp::reply::json(&ApiResponse::<UserCamDesignResult> {
+            success: false,
+            data: None,
+            message: Some("Default device not found".to_string()),
+        })),
+        Err(e) => Ok(warp::reply::json(&ApiResponse::<UserCamDesignResult> {
             success: false,
             data: None,
             message: Some(e.to_string()),

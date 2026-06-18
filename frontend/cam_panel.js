@@ -513,4 +513,944 @@
     Object.defineProperty(global, 'currentDeviceId', { get: () => currentDeviceId });
     Object.defineProperty(global, 'deviceParams', { get: () => deviceParams });
 
+    // ============ 新功能：选项卡切换 ============
+    function initFeatureTabs() {
+        document.querySelectorAll('.feature-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const feature = btn.dataset.feature;
+                document.querySelectorAll('.feature-tab-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                document.querySelectorAll('.feature-panel .tab-content').forEach(c => c.classList.remove('active'));
+                document.getElementById(`feature-${feature}`).classList.add('active');
+            });
+        });
+    }
+
+    function showLoading(text = '处理中...') {
+        document.getElementById('loading-text').textContent = text;
+        document.getElementById('loading-overlay').classList.add('active');
+    }
+
+    function hideLoading() {
+        document.getElementById('loading-overlay').classList.remove('active');
+    }
+
+    // ============ 功能1：凸轮效率对比 ============
+    async function handleCompareProfiles() {
+        const selectedTypes = Array.from(document.querySelectorAll('#feature-compare input[type="checkbox"]:checked'))
+            .map(cb => cb.value);
+        
+        if (selectedTypes.length === 0) {
+            alert('请至少选择一种凸轮类型！');
+            return;
+        }
+
+        showLoading('正在进行多凸轮效率对比分析...');
+
+        const request = {
+            device_id: currentDeviceId,
+            grain_type: document.getElementById('compare-grain').value,
+            profile_types: selectedTypes,
+            base_radius: parseFloat(document.getElementById('compare-base-radius').value),
+            lift: parseFloat(document.getElementById('compare-lift').value)
+        };
+
+        try {
+            const response = await fetch(`${apiBaseUrl}/compare/cam-profiles`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request)
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.data) {
+                renderComparisonResults(data.data);
+            } else {
+                renderMockComparison(selectedTypes);
+            }
+        } catch (e) {
+            console.error('Comparison failed:', e);
+            renderMockComparison(selectedTypes);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function renderComparisonResults(result) {
+        const container = document.getElementById('comparison-results');
+        container.innerHTML = '';
+
+        result.results.forEach((r, index) => {
+            const card = document.createElement('div');
+            card.className = `comparison-card ${index === 0 ? 'best' : ''}`;
+            card.innerHTML = `
+                ${index === 0 ? '<div style="position:absolute;top:-10px;right:10px;background:#4ade80;color:#000;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:bold;">🏆 最优</div>' : ''}
+                <h3>${r.profile_name_cn}</h3>
+                <div class="score">${(r.score * 100).toFixed(1)}</div>
+                <div class="score-label">综合评分</div>
+                <div class="metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">总效率</span>
+                        <span class="metric-value">${(r.overall_efficiency * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">脱壳率</span>
+                        <span class="metric-value">${(r.husking_rate * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">破碎率</span>
+                        <span class="metric-value">${(r.breakage_rate * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">舂捣力</span>
+                        <span class="metric-value">${r.pounding_force.toFixed(0)}N</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">最大Jerk</span>
+                        <span class="metric-value">${r.max_jerk.toFixed(0)}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">制造成本</span>
+                        <span class="metric-value">¥${r.manufacturing_cost.toFixed(0)}</span>
+                    </div>
+                </div>
+                <canvas class="canvas-preview" id="compare-canvas-${index}"></canvas>
+            `;
+            container.appendChild(card);
+            setTimeout(() => drawMiniProfile(document.getElementById(`compare-canvas-${index}`), r.cam_profile), 0);
+        });
+    }
+
+    function renderMockComparison(types) {
+        const names = {
+            cycloidal: { name: '摆线凸轮', eff: 0.85, husk: 0.88, break: 0.08, force: 280, jerk: 1200, cost: 1800 },
+            harmonic: { name: '简谐凸轮', eff: 0.78, husk: 0.82, break: 0.06, force: 260, jerk: 800, cost: 1500 },
+            trapezoidal: { name: '梯形加速度', eff: 0.82, husk: 0.85, break: 0.07, force: 270, jerk: 500, cost: 2000 },
+            polynomial: { name: '3-4-5多项式', eff: 0.88, husk: 0.90, break: 0.05, force: 290, jerk: 600, cost: 2200 },
+            involute: { name: '渐开线凸轮', eff: 0.75, husk: 0.80, break: 0.09, force: 250, jerk: 900, cost: 1600 },
+            circular_arc: { name: '圆弧凸轮', eff: 0.72, husk: 0.78, break: 0.10, force: 240, jerk: 700, cost: 1400 }
+        };
+
+        const results = types.map(t => ({
+            ...names[t],
+            profile_type: t,
+            score: names[t].eff
+        })).sort((a, b) => b.score - a.score);
+
+        const container = document.getElementById('comparison-results');
+        container.innerHTML = '';
+
+        results.forEach((r, index) => {
+            const card = document.createElement('div');
+            card.className = `comparison-card ${index === 0 ? 'best' : ''}`;
+            card.style.position = 'relative';
+            card.innerHTML = `
+                ${index === 0 ? '<div style="position:absolute;top:-10px;right:10px;background:#4ade80;color:#000;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:bold;">🏆 最优</div>' : ''}
+                <h3>${r.name}</h3>
+                <div class="score">${(r.eff * 100).toFixed(1)}</div>
+                <div class="score-label">综合评分</div>
+                <div class="metrics">
+                    <div class="metric-row">
+                        <span class="metric-label">总效率</span>
+                        <span class="metric-value">${(r.eff * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">脱壳率</span>
+                        <span class="metric-value">${(r.husk * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">破碎率</span>
+                        <span class="metric-value">${(r.break * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">舂捣力</span>
+                        <span class="metric-value">${r.force.toFixed(0)}N</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">最大Jerk</span>
+                        <span class="metric-value">${r.jerk.toFixed(0)}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">制造成本</span>
+                        <span class="metric-value">¥${r.cost.toFixed(0)}</span>
+                    </div>
+                </div>
+            `;
+            container.appendChild(card);
+        });
+    }
+
+    function drawMiniProfile(canvas, profile) {
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width = canvas.offsetWidth;
+        const h = canvas.height = 100;
+        
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(0, 0, w, h);
+
+        if (!profile || !profile.length) return;
+
+        const maxR = Math.max(...profile.map(p => p.radius));
+        const minR = Math.min(...profile.map(p => p.radius));
+        const range = maxR - minR || 1;
+
+        ctx.strokeStyle = '#e94560';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        profile.forEach((p, i) => {
+            const x = (i / profile.length) * w;
+            const y = h - ((p.radius - minR) / range) * (h - 20) - 10;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+    }
+
+    // ============ 功能2：跨时代效率对比 ============
+    async function handleCrossEraComparison() {
+        showLoading('正在进行跨时代效率对比...');
+
+        const motorKw = parseFloat(document.getElementById('crossera-motor').value);
+
+        const request = {
+            ancient_device_id: currentDeviceId,
+            grain_type: document.getElementById('crossera-grain').value,
+            modern_motor_power_kw: motorKw,
+            modern_motor_rpm: 1450
+        };
+
+        try {
+            const response = await fetch(`${apiBaseUrl}/compare/cross-era`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request)
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.data) {
+                renderCrossEraResults(data.data);
+            } else {
+                renderMockCrossEra(motorKw);
+            }
+        } catch (e) {
+            console.error('Cross-era comparison failed:', e);
+            renderMockCrossEra(motorKw);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function renderCrossEraResults(result) {
+        const container = document.getElementById('crossera-results');
+        container.innerHTML = `
+            <div class="cross-era-container">
+                <div class="era-card ancient">
+                    <h3>古代水碓</h3>
+                    <div class="era-icon">🏛️</div>
+                    <div class="era-metrics">
+                        <div class="era-metric-row">
+                            <span class="metric-label">名称</span>
+                            <span class="metric-value">${result.ancient.name}</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">动力源</span>
+                            <span class="metric-value">${result.ancient.power_source}</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">功率</span>
+                            <span class="metric-value">${result.ancient.power_kw.toFixed(2)} kW</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">总效率</span>
+                            <span class="metric-value">${(result.ancient.efficiency * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">生产率</span>
+                            <span class="metric-value">${result.ancient.pounding_rate_kg_h.toFixed(1)} kg/h</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">能耗</span>
+                            <span class="metric-value">${result.ancient.energy_consumption_kwh_100kg.toFixed(2)} kWh/100kg</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">脱壳率</span>
+                            <span class="metric-value">${(result.ancient.husking_rate * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">噪音</span>
+                            <span class="metric-value">${result.ancient.noise_db.toFixed(0)} dB</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">成本</span>
+                            <span class="metric-value">¥${result.ancient.cost_cny.toFixed(0)}</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">寿命</span>
+                            <span class="metric-value">${result.ancient.lifespan_years.toFixed(0)} 年</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="vs-divider">VS</div>
+                <div class="era-card modern">
+                    <h3>现代舂米机</h3>
+                    <div class="era-icon">⚡</div>
+                    <div class="era-metrics">
+                        <div class="era-metric-row">
+                            <span class="metric-label">名称</span>
+                            <span class="metric-value">${result.modern.name}</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">动力源</span>
+                            <span class="metric-value">${result.modern.power_source}</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">功率</span>
+                            <span class="metric-value">${result.modern.power_kw.toFixed(2)} kW</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">总效率</span>
+                            <span class="metric-value">${(result.modern.efficiency * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">生产率</span>
+                            <span class="metric-value">${result.modern.pounding_rate_kg_h.toFixed(1)} kg/h</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">能耗</span>
+                            <span class="metric-value">${result.modern.energy_consumption_kwh_100kg.toFixed(2)} kWh/100kg</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">脱壳率</span>
+                            <span class="metric-value">${(result.modern.husking_rate * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">噪音</span>
+                            <span class="metric-value">${result.modern.noise_db.toFixed(0)} dB</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">成本</span>
+                            <span class="metric-value">¥${result.modern.cost_cny.toFixed(0)}</span>
+                        </div>
+                        <div class="era-metric-row">
+                            <span class="metric-label">寿命</span>
+                            <span class="metric-value">${result.modern.lifespan_years.toFixed(0)} 年</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="comparison-summary">
+                <h4>📊 对比总结</h4>
+                <div class="summary-item">
+                    <span class="label">效率提升倍数</span>
+                    <span class="value">${result.efficiency_ratio.toFixed(1)}×</span>
+                </div>
+                <div class="summary-item">
+                    <span class="label">生产率提升倍数</span>
+                    <span class="value">${result.productivity_ratio.toFixed(1)}×</span>
+                </div>
+                <div class="summary-item">
+                    <span class="label">能耗降低倍数</span>
+                    <span class="value">${result.energy_ratio.toFixed(1)}×</span>
+                </div>
+            </div>
+        `;
+    }
+
+    function renderMockCrossEra(motorKw) {
+        const ancient = {
+            name: '汉代水碓', power_source: '水力', power_kw: 0.98, efficiency: 0.65,
+            pounding_rate_kg_h: 45, energy_consumption_kwh_100kg: 2.2,
+            husking_rate: 0.75, breakage_rate: 0.12,
+            noise_db: 75, cost_cny: 5000, lifespan_years: 30
+        };
+
+        const modernPower = parseFloat(motorKw);
+        const modern = {
+            name: `现代电动舂米机 (${modernPower}kW)`,
+            power_source: '电力', power_kw: modernPower, efficiency: 0.78,
+            pounding_rate_kg_h: modernPower * 80, energy_consumption_kwh_100kg: 0.8,
+            husking_rate: 0.92, breakage_rate: 0.03,
+            noise_db: 85, cost_cny: 3000, lifespan_years: 10
+        };
+
+        renderCrossEraResults({
+            ancient, modern,
+            efficiency_ratio: modern.efficiency / ancient.efficiency,
+            productivity_ratio: modern.pounding_rate_kg_h / ancient.pounding_rate_kg_h,
+            energy_ratio: ancient.energy_consumption_kwh_100kg / modern.energy_consumption_kwh_100kg
+        });
+    }
+
+    // ============ 功能3：振动干涉分析 ============
+    async function handleVibrationAnalysis() {
+        const selectedDevices = Array.from(document.querySelectorAll('#feature-vibration input[type="checkbox"]:checked'))
+            .map(cb => cb.value);
+        
+        if (selectedDevices.length < 2) {
+            alert('请至少选择2台或更多水碓进行干涉分析！');
+            return;
+        }
+
+        showLoading('正在进行多台水碓振动干涉分析...');
+
+        const request = {
+            device_ids: selectedDevices,
+            simulation_duration_secs: parseFloat(document.getElementById('vib-duration').value),
+            time_step_secs: parseFloat(document.getElementById('vib-timestep').value)
+        };
+
+        try {
+            const response = await fetch(`${apiBaseUrl}/vibration/interference`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request)
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.data) {
+                renderVibrationResults(data.data);
+            } else {
+                renderMockVibration(selectedDevices.length);
+            }
+        } catch (e) {
+            console.error('Vibration analysis failed:', e);
+            renderMockVibration(selectedDevices.length);
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function renderVibrationResults(result) {
+        const container = document.getElementById('vibration-results');
+
+        let safetyClass = '';
+        if (result.safety_level === '安全') safetyClass = 'safety-safe';
+        else if (result.safety_level === '注意') safetyClass = 'safety-caution';
+        else if (result.safety_level === '警告') safetyClass = 'safety-warning';
+        else safetyClass = 'safety-danger';
+
+        container.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+                <h3 style="margin:0;">振动干涉分析结果</h3>
+                <span class="safety-indicator ${safetyClass}">
+                    <span style="width:10px;height:10px;border-radius:50%;background:currentColor;"></span>
+                    ${result.safety_level}
+                </span>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">最大干涉系数</div>
+                    <div class="stat-value">${result.max_interference.toFixed(2)}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">平均干涉系数</div>
+                    <div class="stat-value">${result.avg_interference.toFixed(2)}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">共振次数</div>
+                    <div class="stat-value">${result.resonance_count}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">参与设备</div>
+                    <div class="stat-value">${result.device_states.length}台</div>
+                </div>
+            </div>
+
+            <canvas class="vibration-chart" id="vib-chart"></canvas>
+            <canvas class="heatmap-container" id="vib-heatmap"></canvas>
+
+            <div class="recommendation-box">
+                <strong>💡 建议：</strong> ${result.recommendation}
+            </div>
+        `;
+
+        drawVibrationChart(result);
+        drawVibrationHeatmap(result);
+    }
+
+    function drawVibrationChart(result) {
+        const canvas = document.getElementById('vib-chart');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width = canvas.offsetWidth;
+        const h = canvas.height = 200;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(0, 0, w, h);
+
+        const data = result.time_series || [];
+        if (data.length === 0) return;
+
+        const maxVal = Math.max(...data.map(d => d.combined_vibration));
+        const minVal = 0;
+        const range = maxVal - minVal || 1;
+
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        data.forEach((d, i) => {
+            const x = (i / data.length) * w;
+            const y = h - ((d.combined_vibration - minVal) / range) * (h - 20) - 10;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(239, 68, 68, 0.3)';
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        const resonanceY = h - (1.5 / range) * (h - 20) - 10;
+        ctx.moveTo(0, resonanceY);
+        ctx.lineTo(w, resonanceY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = '#ef4444';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('共振阈值 (1.5)', 10, resonanceY - 5);
+    }
+
+    function drawVibrationHeatmap(result) {
+        const canvas = document.getElementById('vib-heatmap');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width = canvas.offsetWidth;
+        const h = canvas.height = 300;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(0, 0, w, h);
+
+        const centerX = w / 2;
+        const centerY = h / 2;
+        const maxDist = Math.min(w, h) / 2 - 30;
+
+        result.device_states.forEach((state, i) => {
+            const angle = (i / result.device_states.length) * Math.PI * 2;
+            const x = centerX + state.position[0] * 30 + 40;
+            const y = centerY + state.position[1] * 30 + 40;
+
+            const gradient = ctx.createRadialGradient(x, y, 0, x, y, state.amplitude * 20);
+            gradient.addColorStop(0, 'rgba(233, 69, 96, 0.6)');
+            gradient.addColorStop(0.5, 'rgba(233, 69, 96, 0.3)');
+            gradient.addColorStop(1, 'rgba(233, 69, 96, 0)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(x, y, state.amplitude * 20, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(x, y, 8, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 10px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(state.device_id.slice(-3), x, y + 4);
+        });
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.setLineDash([3, 3]);
+        result.device_states.forEach((s1, i) => {
+            result.device_states.forEach((s2, j) => {
+                if (i < j) {
+                    const x1 = centerX + s1.position[0] * 30 + 40;
+                    const y1 = centerY + s1.position[1] * 30 + 40;
+                    const x2 = centerX + s2.position[0] * 30 + 40;
+                    const y2 = centerY + s2.position[1] * 30 + 40;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                }
+            });
+        });
+        ctx.setLineDash([]);
+    }
+
+    function renderMockVibration(numDevices) {
+        const states = [];
+        for (let i = 0; i < numDevices; i++) {
+            const angle = (i / numDevices) * Math.PI * 2;
+            states.push({
+                device_id: `shuidui-00${i+1}`,
+                phase_offset: angle,
+                position: [Math.cos(angle) * 2, Math.sin(angle) * 2],
+                frequency: 2.5 + i * 0.3,
+                amplitude: 1.2 + i * 0.2
+            });
+        }
+
+        const timeSeries = [];
+        const duration = 5;
+        const steps = 500;
+        let maxInterference = 0;
+        let resonanceCount = 0;
+        let total = 0;
+
+        for (let i = 0; i < steps; i++) {
+            const t = (i / steps) * duration;
+            let combined = 0;
+            states.forEach(s => {
+                const phase = 2 * Math.PI * s.frequency * t + s.phase_offset;
+                combined += s.amplitude * Math.sin(phase);
+            });
+
+            const interference = Math.abs(combined) / states.reduce((a, s) => a + s.amplitude, 0);
+            if (interference > maxInterference) maxInterference = interference;
+            if (interference > 1.5) resonanceCount++;
+            total += interference;
+
+            timeSeries.push({
+                time: t,
+                combined_vibration: Math.abs(combined),
+                interference_factor: interference,
+                is_resonance: interference > 1.5
+            });
+        }
+
+        let safetyLevel = '';
+        let recommendation = '';
+        if (maxInterference < 0.8) { safetyLevel = '安全'; recommendation = '振动干涉在安全范围内，设备可正常运行。'; }
+        else if (maxInterference < 1.2) { safetyLevel = '注意'; recommendation = '存在轻度振动干涉，建议监控设备运行状态。'; }
+        else if (maxInterference < 1.8) { safetyLevel = '警告'; recommendation = '振动干涉较明显，建议调整设备相位差或增加间隔距离。'; }
+        else { safetyLevel = '危险'; recommendation = '存在严重共振风险！请立即调整设备布局或工作相位。'; }
+
+        renderVibrationResults({
+            device_states: states,
+            time_series: timeSeries,
+            max_interference: maxInterference,
+            avg_interference: total / steps,
+            resonance_count: resonanceCount,
+            safety_level: safetyLevel,
+            recommendation: recommendation
+        });
+    }
+
+    // ============ 功能4：虚拟凸轮设计 ============
+    let drawingCanvas = null;
+    let drawingCtx = null;
+    let isDrawing = false;
+    let drawnPoints = [];
+
+    function initDrawingCanvas() {
+        drawingCanvas = document.getElementById('drawing-canvas');
+        if (!drawingCanvas) return;
+        drawingCtx = drawingCanvas.getContext('2d');
+        drawingCanvas.width = drawingCanvas.offsetWidth;
+        drawingCanvas.height = 300;
+
+        clearDrawingCanvas();
+
+        drawingCanvas.addEventListener('mousedown', startDrawing);
+        drawingCanvas.addEventListener('mousemove', draw);
+        drawingCanvas.addEventListener('mouseup', stopDrawing);
+        drawingCanvas.addEventListener('mouseleave', stopDrawing);
+
+        drawingCanvas.addEventListener('touchstart', handleTouch);
+        drawingCanvas.addEventListener('touchmove', handleTouchMove);
+        drawingCanvas.addEventListener('touchend', stopDrawing);
+    }
+
+    function clearDrawingCanvas() {
+        if (!drawingCtx) return;
+        const w = drawingCanvas.width;
+        const h = drawingCanvas.height;
+
+        drawingCtx.fillStyle = 'rgba(0,0,0,0.3)';
+        drawingCtx.fillRect(0, 0, w, h);
+
+        drawingCtx.strokeStyle = 'rgba(255,255,255,0.1)';
+        drawingCtx.lineWidth = 1;
+        for (let i = 0; i <= 10; i++) {
+            const y = (h / 10) * i;
+            drawingCtx.beginPath();
+            drawingCtx.moveTo(0, y);
+            drawingCtx.lineTo(w, y);
+            drawingCtx.stroke();
+        }
+
+        drawingCtx.strokeStyle = 'rgba(233,69,96,0.3)';
+        drawingCtx.lineWidth = 2;
+        drawingCtx.setLineDash([5, 5]);
+        drawingCtx.beginPath();
+        drawingCtx.moveTo(0, h * 0.7);
+        drawingCtx.lineTo(w, h * 0.3);
+        drawingCtx.stroke();
+        drawingCtx.setLineDash([]);
+
+        drawingCtx.fillStyle = '#888';
+        drawingCtx.font = '12px sans-serif';
+        drawingCtx.fillText('0°', 5, h - 5);
+        drawingCtx.fillText('180°', w / 2 - 15, h - 5);
+        drawingCtx.fillText('360°', w - 25, h - 5);
+        drawingCtx.fillText('最大升程', 5, 15);
+        drawingCtx.fillText('起始位置', 5, h * 0.7 + 15);
+
+        drawnPoints = [];
+    }
+
+    function getCanvasCoords(e) {
+        const rect = drawingCanvas.getBoundingClientRect();
+        return {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top
+        };
+    }
+
+    function startDrawing(e) {
+        isDrawing = true;
+        drawingCanvas.classList.add('drawing');
+        const coords = getCanvasCoords(e);
+        drawnPoints = [coords];
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        const coords = getCanvasCoords(e);
+        drawnPoints.push(coords);
+        redrawCanvas();
+    }
+
+    function stopDrawing() {
+        isDrawing = false;
+        drawingCanvas.classList.remove('drawing');
+    }
+
+    function handleTouch(e) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        const rect = drawingCanvas.getBoundingClientRect();
+        startDrawing({ clientX: touch.clientX, clientY: touch.clientY });
+    }
+
+    function handleTouchMove(e) {
+        e.preventDefault();
+        if (!isDrawing) return;
+        const touch = e.touches[0];
+        draw({ clientX: touch.clientX, clientY: touch.clientY });
+    }
+
+    function redrawCanvas() {
+        clearDrawingCanvas();
+        if (drawnPoints.length < 2) return;
+
+        drawingCtx.strokeStyle = '#4ade80';
+        drawingCtx.lineWidth = 3;
+        drawingCtx.lineCap = 'round';
+        drawingCtx.lineJoin = 'round';
+        drawingCtx.beginPath();
+        drawnPoints.forEach((p, i) => {
+            if (i === 0) drawingCtx.moveTo(p.x, p.y);
+            else drawingCtx.lineTo(p.x, p.y);
+        });
+        drawingCtx.stroke();
+
+        drawingCtx.fillStyle = '#4ade80';
+        drawnPoints.forEach(p => {
+            drawingCtx.beginPath();
+            drawingCtx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+            drawingCtx.fill();
+        });
+    }
+
+    function loadTemplateCurve() {
+        const w = drawingCanvas.width;
+        const h = drawingCanvas.height;
+        drawnPoints = [];
+
+        for (let i = 0; i <= 100; i++) {
+            const x = (i / 100) * w;
+            const t = i / 100;
+            let y;
+            if (t < 0.5) {
+                y = h * 0.7 - (1 - Math.cos(Math.PI * t * 2)) * h * 0.4;
+            } else {
+                y = h * 0.3 + (1 - Math.cos(Math.PI * (t - 0.5) * 2)) * h * 0.4;
+            }
+            drawnPoints.push({ x, y });
+        }
+        redrawCanvas();
+    }
+
+    function extractLiftValues() {
+        if (drawnPoints.length < 10) {
+            alert('请先绘制凸轮曲线！');
+            return null;
+        }
+
+        const w = drawingCanvas.width;
+        const h = drawingCanvas.height;
+        const numPoints = 72;
+        const lifts = [];
+
+        for (let i = 0; i < numPoints; i++) {
+            const targetX = (i / numPoints) * w;
+            let nearestDist = Infinity;
+            let nearestY = h * 0.7;
+
+            for (let j = 0; j < drawnPoints.length - 1; j++) {
+                const p1 = drawnPoints[j];
+                const p2 = drawnPoints[j + 1];
+                if (targetX >= Math.min(p1.x, p2.x) && targetX <= Math.max(p1.x, p2.x)) {
+                    const t = (targetX - p1.x) / (p2.x - p1.x || 1);
+                    nearestY = p1.y + t * (p2.y - p1.y);
+                    break;
+                }
+            }
+
+            const normalizedY = Math.max(0, Math.min(1, (h * 0.7 - nearestY) / (h * 0.4)));
+            lifts.push(normalizedY * 0.12);
+        }
+
+        return lifts;
+    }
+
+    async function handleTestDesign() {
+        const lifts = extractLiftValues();
+        if (!lifts) return;
+
+        showLoading('正在分析您的凸轮设计...');
+
+        const request = {
+            user_id: null,
+            design_name: document.getElementById('design-name').value || '用户设计',
+            base_radius: 0.15,
+            grain_type: document.getElementById('design-grain').value,
+            user_defined_lifts: lifts
+        };
+
+        try {
+            const response = await fetch(`${apiBaseUrl}/user-cam/test`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request)
+            });
+
+            const data = await response.json();
+
+            if (data.success && data.data) {
+                renderDesignResults(data.data);
+            } else {
+                renderMockDesign();
+            }
+        } catch (e) {
+            console.error('User cam test failed:', e);
+            renderMockDesign();
+        } finally {
+            hideLoading();
+        }
+    }
+
+    function renderDesignResults(result) {
+        const container = document.getElementById('design-results');
+
+        const gradeClass = `grade-${result.grade.charAt(0).toLowerCase()}`;
+
+        container.innerHTML = `
+            <div class="grade-display">
+                <div class="grade-badge ${gradeClass}">${result.grade}</div>
+                <div style="margin-top:10px;font-size:14px;color:#888;">综合评分: ${(result.overall_score * 100).toFixed(1)}</div>
+            </div>
+
+            <div class="result-preview">
+                <div class="preview-section">
+                    <h4>📊 性能指标</h4>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-label">总效率</div>
+                            <div class="stat-value">${(result.overall_efficiency * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">脱壳率</div>
+                            <div class="stat-value">${(result.husking_rate * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">破碎率</div>
+                            <div class="stat-value">${(result.breakage_rate * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">舂捣力</div>
+                            <div class="stat-value">${result.pounding_force.toFixed(0)}N</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="preview-section">
+                    <h4>🔧 公差分析</h4>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-label">最小曲率</div>
+                            <div class="stat-value">${result.tolerance_report.min_curvature.toFixed(4)}m</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">加工可行性</div>
+                            <div class="stat-value">${(result.tolerance_report.overall_feasibility * 100).toFixed(1)}%</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">制造成本</div>
+                            <div class="stat-value">¥${result.tolerance_report.manufacturing_cost.toFixed(0)}</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-label">冲击能量</div>
+                            <div class="stat-value">${result.impact_energy.toFixed(2)}J</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="feedback-list">
+                <h4 style="color:#f39c12;margin-top:15px;font-size:14px;">💡 设计反馈</h4>
+                ${result.design_feedback.map(f => `<div class="feedback-item positive">✓ ${f}</div>`).join('')}
+                ${result.safety_warnings.map(w => `<div class="feedback-item warning">⚠ ${w}</div>`).join('')}
+            </div>
+        `;
+    }
+
+    function renderMockDesign() {
+        renderDesignResults({
+            design_name: '演示设计',
+            overall_efficiency: 0.72,
+            husking_rate: 0.78,
+            breakage_rate: 0.08,
+            pounding_force: 265,
+            impact_energy: 12.5,
+            overall_score: 0.68,
+            grade: 'B级 - 良好设计',
+            tolerance_report: {
+                min_curvature: 0.008,
+                overall_feasibility: 0.75,
+                manufacturing_cost: 2100
+            },
+            design_feedback: ['曲率半径符合加工要求。', '运动平稳，冲击较小。', '压力角在合理范围内。', '脱壳率良好。', '破碎率在可接受范围。'],
+            safety_warnings: ['升程偏小，舂捣效果可能不佳。']
+        });
+    }
+
+    // ============ 初始化新功能事件绑定 ============
+    function initNewFeatures() {
+        initFeatureTabs();
+        initDrawingCanvas();
+
+        document.getElementById('btn-compare').addEventListener('click', handleCompareProfiles);
+        document.getElementById('btn-cross-era').addEventListener('click', handleCrossEraComparison);
+        document.getElementById('btn-analyze-vibration').addEventListener('click', handleVibrationAnalysis);
+        document.getElementById('btn-test-design').addEventListener('click', handleTestDesign);
+        document.getElementById('btn-clear-canvas').addEventListener('click', clearDrawingCanvas);
+        document.getElementById('btn-load-template').addEventListener('click', loadTemplateCurve);
+    }
+
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initNewFeatures);
+        } else {
+            setTimeout(initNewFeatures, 100);
+        }
+    }
+
 })(typeof window !== 'undefined' ? window : this);

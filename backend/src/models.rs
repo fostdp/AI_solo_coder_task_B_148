@@ -171,3 +171,157 @@ impl From<MqttSensorMessage> for SensorData {
         }
     }
 }
+
+// ============ 新功能数据模型 ============
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CamProfileComparisonRequest {
+    pub device_id: String,
+    pub grain_type: String,
+    pub profile_types: Vec<String>,
+    pub base_radius: f64,
+    pub lift: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileEfficiencyResult {
+    pub profile_type: String,
+    pub profile_name_cn: String,
+    pub overall_efficiency: f64,
+    pub husking_rate: f64,
+    pub breakage_rate: f64,
+    pub pounding_force: f64,
+    pub impact_energy: f64,
+    pub max_jerk: f64,
+    pub max_pressure_angle: f64,
+    pub min_curvature: f64,
+    pub manufacturing_cost: f64,
+    pub cam_profile: Vec<CamPoint>,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CamProfileComparisonResult {
+    pub comparison_id: String,
+    pub device_id: String,
+    pub grain_type: String,
+    pub results: Vec<ProfileEfficiencyResult>,
+    pub best_profile: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossEraComparisonRequest {
+    pub ancient_device_id: String,
+    pub grain_type: String,
+    pub modern_motor_power_kw: f64,
+    pub modern_motor_rpm: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EraMachineSpecs {
+    pub era: String,
+    pub name: String,
+    pub power_source: String,
+    pub power_kw: f64,
+    pub efficiency: f64,
+    pub pounding_rate_kg_h: f64,
+    pub energy_consumption_kwh_100kg: f64,
+    pub husking_rate: f64,
+    pub breakage_rate: f64,
+    pub noise_db: f64,
+    pub cost_cny: f64,
+    pub lifespan_years: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossEraComparisonResult {
+    pub comparison_id: String,
+    pub grain_type: String,
+    pub ancient: EraMachineSpecs,
+    pub modern: EraMachineSpecs,
+    pub efficiency_ratio: f64,
+    pub productivity_ratio: f64,
+    pub energy_ratio: f64,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VibrationInterferenceRequest {
+    pub device_ids: Vec<String>,
+    pub simulation_duration_secs: f64,
+    pub time_step_secs: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceVibrationState {
+    pub device_id: String,
+    pub phase_offset: f64,
+    pub position: (f64, f64),
+    pub frequency: f64,
+    pub amplitude: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterferencePoint {
+    pub time: f64,
+    pub x: f64,
+    pub y: f64,
+    pub combined_vibration: f64,
+    pub interference_factor: f64,
+    pub is_resonance: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VibrationInterferenceResult {
+    pub analysis_id: String,
+    pub device_states: Vec<DeviceVibrationState>,
+    pub time_series: Vec<InterferencePoint>,
+    pub max_interference: f64,
+    pub avg_interference: f64,
+    pub resonance_count: u32,
+    pub safety_level: String,
+    pub recommendation: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserCamDesignRequest {
+    pub user_id: Option<String>,
+    pub design_name: Option<String>,
+    pub base_radius: f64,
+    pub grain_type: String,
+    pub user_defined_lifts: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserCamDesignResult {
+    pub design_id: String,
+    pub design_name: String,
+    pub overall_efficiency: f64,
+    pub husking_rate: f64,
+    pub breakage_rate: f64,
+    pub pounding_force: f64,
+    pub impact_energy: f64,
+    pub tolerance_report: ToleranceReport,
+    pub cam_profile: Vec<CamPoint>,
+    pub design_feedback: Vec<String>,
+    pub safety_warnings: Vec<String>,
+    pub overall_score: f64,
+    pub grade: String,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModernRiceMillDynamics {
+    pub motor_power_kw: f64,
+    pub motor_rpm: f64,
+    pub transmission_ratio: f64,
+    pub pounding_frequency_hz: f64,
+    pub mechanical_efficiency: f64,
+    pub actual_pounding_force: f64,
+    pub husking_rate: f64,
+    pub breakage_rate: f64,
+    pub energy_efficiency_kwh_kg: f64,
+    pub productivity_kg_h: f64,
+}

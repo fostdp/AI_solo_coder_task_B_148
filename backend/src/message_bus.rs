@@ -1,6 +1,10 @@
 use crate::models::{
     SensorData, DynamicsResult, Alert, DeviceInfo,
     OptimizationRequest, OptimizationResult, CamPoint,
+    CamProfileComparisonRequest, CamProfileComparisonResult,
+    CrossEraComparisonRequest, CrossEraComparisonResult,
+    VibrationInterferenceRequest, VibrationInterferenceResult,
+    UserCamDesignRequest, UserCamDesignResult,
 };
 use tokio::sync::oneshot;
 
@@ -36,6 +40,26 @@ pub enum OptimizerCommand {
         request: OptimizationRequest,
         device: DeviceInfo,
         reply: oneshot::Sender<OptimizationResult>,
+    },
+    CompareProfiles {
+        request: CamProfileComparisonRequest,
+        device: DeviceInfo,
+        reply: oneshot::Sender<CamProfileComparisonResult>,
+    },
+    CompareCrossEra {
+        request: CrossEraComparisonRequest,
+        device: DeviceInfo,
+        reply: oneshot::Sender<CrossEraComparisonResult>,
+    },
+    AnalyzeVibration {
+        request: VibrationInterferenceRequest,
+        devices: Vec<(DeviceInfo, f64)>,
+        reply: oneshot::Sender<VibrationInterferenceResult>,
+    },
+    TestUserCam {
+        request: UserCamDesignRequest,
+        device: DeviceInfo,
+        reply: oneshot::Sender<UserCamDesignResult>,
     },
 }
 
