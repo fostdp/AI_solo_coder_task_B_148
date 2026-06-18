@@ -97,6 +97,12 @@ pub struct PressureAnglePenaltyConfig {
     pub decay_exponent: f64,
 }
 
+impl Default for DynamicsConfig {
+    fn default() -> Self {
+        Self::default_config()
+    }
+}
+
 impl DynamicsConfig {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path)?;

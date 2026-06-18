@@ -2,6 +2,7 @@ use crate::models::{DynamicsResult, SensorData, DeviceInfo, CamPoint};
 use crate::config::DynamicsConfig;
 use chrono::Utc;
 
+#[derive(Debug, Clone)]
 pub struct PenaltyContactModel {
     stiffness: f64,
     damping: f64,

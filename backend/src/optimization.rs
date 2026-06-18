@@ -1,14 +1,35 @@
 use crate::models::{
     OptimizationRequest, OptimizationResult, CamPoint, DeviceInfo, ToleranceReport,
+    CamProfileComparisonRequest, CamProfileComparisonResult,
+    CrossEraComparisonRequest, CrossEraComparisonResult,
+    VibrationInterferenceRequest, VibrationInterferenceResult,
+    UserCamDesignRequest, UserCamDesignResult,
 };
 use crate::dynamics::{calculate_husking_rate, calculate_grain_breakage_rate};
 use crate::config::{OptimizationConfig, ToleranceConfig, DynamicsConfig};
+use crate::cam_comparator::CamComparator;
+use crate::era_comparator::EraComparator;
+use crate::vr_cam_designer::VrCamDesigner;
 use chrono::Utc;
 use uuid::Uuid;
+
+pub use crate::era_comparator::{
+    get_ancient_archaeological_specs, get_modern_standard_specs,
+    AncientShuiduiSpecs, ModernRiceMillStandard,
+};
+pub use crate::vibration_interference::{
+    get_foundation_props_for_type, foundation_transmissibility,
+    VibrationInterferenceAnalyzer,
+};
+pub use crate::cam_comparator::CamComparator as CamComparisonEngine;
+pub use crate::vr_cam_designer::VrCamDesigner as VirtualCamDesigner;
+pub use crate::vr_cam_designer::UserCamToleranceReport;
+pub use crate::dynamics_pool::{DynamicsPool, DynamicsTask, DynamicsTaskResult};
 
 const GRAVITY: f64 = 9.81;
 const MANUFACTURING_COST_BASE: f64 = 1000.0;
 
+#[derive(Clone)]
 pub struct ToleranceAnalysis {
     dimensional_tolerance: f64,
     surface_roughness: f64,
@@ -386,7 +407,7 @@ impl PoundingOptimizer {
         }
     }
 
-    fn generate_profile(&self, profile_type: &str, base_radius: f64, lift: f64) -> Vec<CamPoint> {
+    pub fn generate_profile(&self, profile_type: &str, base_radius: f64, lift: f64) -> Vec<CamPoint> {
         let num_points = 360;
         let mut points = Vec::with_capacity(num_points);
 
@@ -516,7 +537,7 @@ impl PoundingOptimizer {
         }
     }
 
-    fn evaluate_efficiency(
+    pub fn evaluate_efficiency(
         &self,
         profile: &[CamPoint],
         grain_type: &str,
@@ -553,7 +574,7 @@ impl PoundingOptimizer {
         Some(pressure_angle)
     }
 
-    fn calculate_average_pounding_force(
+    pub fn calculate_average_pounding_force(
         &self,
         profile: &[CamPoint],
         _base_radius: f64,
@@ -572,7 +593,7 @@ impl PoundingOptimizer {
         gravity_force + inertia_force
     }
 
-    fn calculate_impact_energy_per_cycle(&self, lift: f64) -> f64 {
+    pub fn calculate_impact_energy_per_cycle(&self, lift: f64) -> f64 {
         let mass = self.device.duitou_mass;
         let velocity = (2.0 * GRAVITY * lift).sqrt();
         0.5 * mass * velocity.powi(2)
@@ -741,644 +762,127 @@ impl PoundingOptimizer {
 impl PoundingOptimizer {
     pub fn compare_cam_profiles(
         &self,
-        request: &crate::models::CamProfileComparisonRequest,
-    ) -> crate::models::CamProfileComparisonResult {
-        let mut results = Vec::new();
-
-        for profile_type in &request.profile_types {
-            let profile = self.generate_profile_extended(
-                profile_type,
-                request.base_radius,
-                request.lift,
-            );
-
-            let tolerance_report = self.tolerance.analyze(&profile);
-
-            let efficiency = self.evaluate_efficiency(
-                &profile,
-                &request.grain_type,
-                request.base_radius,
-                request.lift,
-            );
-
-            let cost_factor =
-                (MANUFACTURING_COST_BASE / tolerance_report.manufacturing_cost)
-                    .max(0.3)
-                    .min(1.0);
-
-            let tolerance_factor = tolerance_report.overall_feasibility.max(0.3);
-            let score = efficiency * cost_factor * tolerance_factor * 0.7 + efficiency * 0.3;
-
-            let avg_force = self.calculate_average_pounding_force(&profile, request.base_radius, request.lift);
-            let impact_energy = self.calculate_impact_energy_per_cycle(request.lift);
-            let husking_rate = calculate_husking_rate(impact_energy, &request.grain_type, &self.dynamics_config);
-            let breakage_rate = calculate_grain_breakage_rate(impact_energy, avg_force, &self.dynamics_config);
-
-            let max_jerk = profile.windows(3)
-                .map(|w| {
-                    let dt = 2.0 * std::f64::consts::PI / 360.0;
-                    let da1 = (w[1].acceleration - w[0].acceleration) / dt;
-                    let da2 = (w[2].acceleration - w[1].acceleration) / dt;
-                    ((da2 - da1) / dt).abs()
-                })
-                .fold(0.0, f64::max);
-
-            let max_pressure_angle = self.calculate_pressure_angle(request.base_radius, request.lift)
-                .unwrap_or(0.0);
-
-            results.push(crate::models::ProfileEfficiencyResult {
-                profile_type: profile_type.clone(),
-                profile_name_cn: self.get_profile_name_cn(profile_type).to_string(),
-                overall_efficiency: efficiency,
-                husking_rate,
-                breakage_rate,
-                pounding_force: avg_force,
-                impact_energy,
-                max_jerk,
-                max_pressure_angle: max_pressure_angle.to_degrees(),
-                min_curvature: tolerance_report.min_curvature,
-                manufacturing_cost: tolerance_report.manufacturing_cost,
-                cam_profile: profile,
-                score,
-            });
-        }
-
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        let best_profile = results.first().map(|r| r.profile_type.clone()).unwrap_or_default();
-
-        crate::models::CamProfileComparisonResult {
-            comparison_id: Uuid::new_v4().to_string(),
-            device_id: request.device_id.clone(),
-            grain_type: request.grain_type.clone(),
-            results,
-            best_profile,
-            timestamp: Utc::now(),
-        }
+        request: &CamProfileComparisonRequest,
+    ) -> CamProfileComparisonResult {
+        let comparator = CamComparator::new(
+            self.tolerance.clone(),
+            self.dynamics_config.clone(),
+        );
+        comparator.compare_profiles(request, &self.device)
     }
 }
 
 // ============ 功能2：跨时代效率对比 ============
 
-const ANCIENT_SHUIDUI_ARCHAEOLOGICAL: &str = "ancient";
-const ANCIENT_DYNASIES: &[&str] = &["汉代", "唐代", "宋代", "元代", "明代", "清代"];
-
-struct AncientShuiduiSpecs {
-    water_head_m: f64,
-    water_flow_m3_s: f64,
-    duitou_mass_kg: f64,
-    cam_base_radius_m: f64,
-    cam_lift_m: f64,
-    cycles_per_min: f64,
-    kg_per_cycle: f64,
-    noise_db: f64,
-    cost_cny_ancient: f64,
-    lifespan_years: f64,
-    mechanical_efficiency: f64,
-    reference: &'static str,
-}
-
-fn get_ancient_archaeological_specs() -> AncientShuiduiSpecs {
-    AncientShuiduiSpecs {
-        water_head_m: 2.0,
-        water_flow_m3_s: 0.05,
-        duitou_mass_kg: 30.0,
-        cam_base_radius_m: 0.12,
-        cam_lift_m: 0.15,
-        cycles_per_min: 15.0,
-        kg_per_cycle: 0.04,
-        noise_db: 82.0,
-        cost_cny_ancient: 15000.0,
-        lifespan_years: 25.0,
-        mechanical_efficiency: 0.45,
-        reference: "《天工开物·粹精》+ 河南巩义铁生沟汉代冶铁遗址出土水碓构件实测",
-    }
-}
-
-struct ModernRiceMillStandard {
-    model: &'static str,
-    power_kw: f64,
-    capacity_kg_h: f64,
-    husking_rate: f64,
-    breakage_rate: f64,
-    energy_kwh_100kg: f64,
-    noise_db: f64,
-    mechanical_efficiency: f64,
-    cost_cny: f64,
-    lifespan_years: f64,
-    standard: &'static str,
-}
-
-fn get_modern_standard_specs(requested_power_kw: f64) -> ModernRiceMillStandard {
-    if requested_power_kw <= 1.5 {
-        ModernRiceMillStandard {
-            model: "SM-150 家用小型",
-            power_kw: 1.5,
-            capacity_kg_h: 200.0,
-            husking_rate: 0.92,
-            breakage_rate: 0.04,
-            energy_kwh_100kg: 0.90,
-            noise_db: 82.0,
-            mechanical_efficiency: 0.82,
-            cost_cny: 1800.0,
-            lifespan_years: 8.0,
-            standard: "GB/T 25731-2010 粮油机械 砻谷机",
-        }
-    } else if requested_power_kw <= 2.5 {
-        ModernRiceMillStandard {
-            model: "SM-220 标准型",
-            power_kw: 2.2,
-            capacity_kg_h: 380.0,
-            husking_rate: 0.94,
-            breakage_rate: 0.035,
-            energy_kwh_100kg: 0.70,
-            noise_db: 85.0,
-            mechanical_efficiency: 0.85,
-            cost_cny: 3200.0,
-            lifespan_years: 10.0,
-            standard: "GB/T 25731-2010 粮油机械 砻谷机",
-        }
-    } else if requested_power_kw <= 4.0 {
-        ModernRiceMillStandard {
-            model: "SM-300 商用型",
-            power_kw: 3.0,
-            capacity_kg_h: 650.0,
-            husking_rate: 0.95,
-            breakage_rate: 0.03,
-            energy_kwh_100kg: 0.55,
-            noise_db: 88.0,
-            mechanical_efficiency: 0.86,
-            cost_cny: 5800.0,
-            lifespan_years: 12.0,
-            standard: "GB/T 25731-2010 粮油机械 砻谷机",
-        }
-    } else {
-        ModernRiceMillStandard {
-            model: "SM-750 工业型",
-            power_kw: 7.5,
-            capacity_kg_h: 1600.0,
-            husking_rate: 0.96,
-            breakage_rate: 0.025,
-            energy_kwh_100kg: 0.45,
-            noise_db: 92.0,
-            mechanical_efficiency: 0.88,
-            cost_cny: 12800.0,
-            lifespan_years: 15.0,
-            standard: "GB/T 25731-2010 粮油机械 砻谷机",
-        }
-    }
-}
-
 impl PoundingOptimizer {
     pub fn compare_cross_era(
         &self,
-        request: &crate::models::CrossEraComparisonRequest,
-    ) -> crate::models::CrossEraComparisonResult {
-        let arch = get_ancient_archaeological_specs();
-
-        let ancient_gravity_accel = 9.81;
-        let ancient_power_kw = arch.water_flow_m3_s * 1000.0
-            * ancient_gravity_accel
-            * arch.water_head_m
-            * arch.mechanical_efficiency
-            / 1000.0;
-
-        let ancient_cycles_per_hour = arch.cycles_per_min * 60.0;
-        let ancient_productivity = ancient_cycles_per_hour * arch.kg_per_cycle;
-        let ancient_energy = ancient_power_kw / ancient_productivity.max(1.0) * 100.0;
-
-        let ancient_profile = self.generate_profile(
-            "cycloidal",
-            arch.cam_base_radius_m,
-            arch.cam_lift_m,
+        request: &CrossEraComparisonRequest,
+    ) -> CrossEraComparisonResult {
+        let comparator = EraComparator::new(
+            self.tolerance.clone(),
+            self.dynamics_config.clone(),
         );
-        let ancient_eff = self.evaluate_efficiency(
-            &ancient_profile,
-            &request.grain_type,
-            arch.cam_base_radius_m,
-            arch.cam_lift_m,
-        );
-        let ancient_impact = self.calculate_impact_energy_per_cycle(arch.cam_lift_m);
-        let ancient_husking = calculate_husking_rate(
-            ancient_impact,
-            &request.grain_type,
-            &self.dynamics_config,
-        );
-        let ancient_breakage = calculate_grain_breakage_rate(
-            ancient_impact,
-            self.calculate_average_pounding_force(
-                &ancient_profile,
-                arch.cam_base_radius_m,
-                arch.cam_lift_m,
-            ),
-            &self.dynamics_config,
-        );
-
-        let ancient = crate::models::EraMachineSpecs {
-            era: ANCIENT_SHUIDUI_ARCHAEOLOGICAL.to_string(),
-            name: format!(
-                "古代水碓（{}实测，{}）",
-                ANCIENT_DYNASIES[0],
-                arch.reference
-            ),
-            power_source: format!(
-                "水力（落差{:.1}m，流量{:.3}m³/s）",
-                arch.water_head_m, arch.water_flow_m3_s
-            ),
-            power_kw: ancient_power_kw,
-            efficiency: ancient_eff.min(1.0),
-            pounding_rate_kg_h: ancient_productivity,
-            energy_consumption_kwh_100kg: ancient_energy.max(0.01),
-            husking_rate: ancient_husking,
-            breakage_rate: ancient_breakage,
-            noise_db: arch.noise_db,
-            cost_cny: arch.cost_cny_ancient,
-            lifespan_years: arch.lifespan_years,
-        };
-
-        let modern_std = get_modern_standard_specs(request.modern_motor_power_kw);
-
-        let modern = crate::models::EraMachineSpecs {
-            era: "modern".to_string(),
-            name: format!(
-                "现代电动砻谷机 {}（符合{}）",
-                modern_std.model, modern_std.standard
-            ),
-            power_source: "电力（三相异步电机）".to_string(),
-            power_kw: modern_std.power_kw,
-            efficiency: modern_std.husking_rate
-                * (1.0 - modern_std.breakage_rate)
-                * modern_std.mechanical_efficiency,
-            pounding_rate_kg_h: modern_std.capacity_kg_h,
-            energy_consumption_kwh_100kg: modern_std.energy_kwh_100kg,
-            husking_rate: modern_std.husking_rate,
-            breakage_rate: modern_std.breakage_rate,
-            noise_db: modern_std.noise_db,
-            cost_cny: modern_std.cost_cny,
-            lifespan_years: modern_std.lifespan_years,
-        };
-
-        let efficiency_ratio = modern.efficiency / ancient.efficiency.max(0.01);
-        let productivity_ratio = modern.pounding_rate_kg_h / ancient.pounding_rate_kg_h.max(0.01);
-        let energy_ratio = ancient.energy_consumption_kwh_100kg / modern.energy_consumption_kwh_100kg.max(0.01);
-
-        crate::models::CrossEraComparisonResult {
-            comparison_id: Uuid::new_v4().to_string(),
-            grain_type: request.grain_type.clone(),
-            ancient,
-            modern,
-            efficiency_ratio,
-            productivity_ratio,
-            energy_ratio,
-            timestamp: Utc::now(),
-        }
+        comparator.compare_cross_era(request)
     }
 }
 
 // ============ 功能3：多台水碓振动干涉分析 ============
-
-fn get_foundation_props_for_type(
-    ftype: crate::models::FoundationType,
-) -> crate::models::FoundationProperties {
-    match ftype {
-        crate::models::FoundationType::Soil => crate::models::FoundationProperties {
-            foundation_type: ftype,
-            natural_frequency_hz: 3.0,
-            damping_ratio: 0.15,
-            stiffness_n_m: 1.0e7,
-            mass_kg: 5000.0,
-            coupling_factor: 0.95,
-        },
-        crate::models::FoundationType::ConcreteSlab => crate::models::FoundationProperties {
-            foundation_type: ftype,
-            natural_frequency_hz: 8.0,
-            damping_ratio: 0.05,
-            stiffness_n_m: 5.0e7,
-            mass_kg: 10000.0,
-            coupling_factor: 0.70,
-        },
-        crate::models::FoundationType::ReinforcedConcrete => crate::models::FoundationProperties {
-            foundation_type: ftype,
-            natural_frequency_hz: 15.0,
-            damping_ratio: 0.03,
-            stiffness_n_m: 1.5e8,
-            mass_kg: 25000.0,
-            coupling_factor: 0.50,
-        },
-        crate::models::FoundationType::PileFoundation => crate::models::FoundationProperties {
-            foundation_type: ftype,
-            natural_frequency_hz: 25.0,
-            damping_ratio: 0.10,
-            stiffness_n_m: 5.0e8,
-            mass_kg: 50000.0,
-            coupling_factor: 0.30,
-        },
-    }
-}
-
-fn foundation_transmissibility(
-    forcing_freq_hz: f64,
-    foundation: &crate::models::FoundationProperties,
-) -> f64 {
-    let r = forcing_freq_hz / foundation.natural_frequency_hz.max(0.1);
-    let zeta = foundation.damping_ratio;
-    let numerator = (1.0 + (2.0 * zeta * r).powi(2)).sqrt();
-    let denominator = ((1.0 - r.powi(2)).powi(2) + (2.0 * zeta * r).powi(2)).sqrt();
-    numerator / denominator.max(0.001)
-}
-
-pub struct VibrationInterferenceAnalyzer {
-    devices: Vec<(DeviceInfo, f64)>,
-    sampling_rate: f64,
-    foundation: crate::models::FoundationProperties,
-}
-
-impl VibrationInterferenceAnalyzer {
-    pub fn new(devices: Vec<(DeviceInfo, f64)>) -> Self {
-        VibrationInterferenceAnalyzer {
-            devices,
-            sampling_rate: 100.0,
-            foundation: crate::models::FoundationProperties::default(),
-        }
-    }
-
-    pub fn with_foundation(
-        devices: Vec<(DeviceInfo, f64)>,
-        foundation: crate::models::FoundationProperties,
-    ) -> Self {
-        VibrationInterferenceAnalyzer {
-            devices,
-            sampling_rate: 100.0,
-            foundation,
-        }
-    }
-
-    pub fn analyze(
-        &self,
-        duration_secs: f64,
-        time_step: f64,
-    ) -> crate::models::VibrationInterferenceResult {
-        let mut device_states = Vec::new();
-        let pi = std::f64::consts::PI;
-
-        for (i, (device, phase_offset)) in self.devices.iter().enumerate() {
-            let angle = (i as f64) * 2.0 * pi / self.devices.len() as f64;
-            let distance = 2.0 + (i as f64) * 0.5;
-            let frequency = device.water_flow_rate.max(0.01) * 5.0;
-            let amplitude = 1.0 + device.duitou_mass / 50.0;
-            let trans = foundation_transmissibility(frequency, &self.foundation);
-            let foundation_transmitted_amp = amplitude * trans * self.foundation.coupling_factor;
-
-            device_states.push(crate::models::DeviceVibrationState {
-                device_id: device.device_id.clone(),
-                phase_offset: *phase_offset,
-                position: (distance * angle.cos(), distance * angle.sin()),
-                frequency,
-                amplitude,
-                foundation_transmitted_amp,
-            });
-        }
-
-        let mut time_series = Vec::new();
-        let num_steps = (duration_secs / time_step) as usize;
-
-        let mut max_interference = 0.0;
-        let mut total_interference = 0.0;
-        let mut max_foundation_vib = 0.0;
-        let mut resonance_count = 0;
-        let mut foundation_resonance_count = 0;
-
-        for step in 0..num_steps {
-            let t = step as f64 * time_step;
-
-            let mut vib_x_total = 0.0;
-            let mut vib_y_total = 0.0;
-            let mut foundation_vib = 0.0;
-            let mut sum_amp = 0.0;
-            let mut sum_foundation_amp = 0.0;
-
-            for state in &device_states {
-                let phase = 2.0 * pi * state.frequency * t + state.phase_offset;
-                let vib = state.amplitude * phase.sin();
-
-                let dx = state.position.0;
-                let dy = state.position.1;
-                let dist_sq = dx * dx + dy * dy;
-                let spatial_attenuation = 1.0 / (1.0 + dist_sq * 0.1);
-
-                vib_x_total += vib * dx * spatial_attenuation;
-                vib_y_total += vib * dy * spatial_attenuation;
-                sum_amp += state.amplitude * spatial_attenuation;
-
-                let foundation_phase = phase;
-                foundation_vib += state.foundation_transmitted_amp
-                    * foundation_phase.sin()
-                    * spatial_attenuation;
-                sum_foundation_amp += state.foundation_transmitted_amp * spatial_attenuation;
-            }
-
-            let combined = (vib_x_total.powi(2) + vib_y_total.powi(2)).sqrt();
-            let interference = if sum_amp > 0.0 { combined / sum_amp } else { 0.0 };
-            let foundation_abs = foundation_vib.abs();
-            let foundation_norm = if sum_foundation_amp > 0.0 {
-                foundation_abs / sum_foundation_amp
-            } else {
-                0.0
-            };
-
-            let is_resonance = interference > 1.5;
-            let is_foundation_coupled = foundation_norm > 0.6;
-
-            if is_resonance {
-                resonance_count += 1;
-            }
-            if foundation_norm > 0.8 {
-                foundation_resonance_count += 1;
-            }
-
-            if interference > max_interference {
-                max_interference = interference;
-            }
-            if foundation_abs > max_foundation_vib {
-                max_foundation_vib = foundation_abs;
-            }
-            total_interference += interference;
-
-            time_series.push(crate::models::InterferencePoint {
-                time: t,
-                x: vib_x_total,
-                y: vib_y_total,
-                combined_vibration: combined,
-                foundation_vibration: foundation_abs,
-                interference_factor: interference,
-                is_resonance,
-                is_foundation_coupled,
-            });
-        }
-
-        let avg_interference = if num_steps > 0 { total_interference / num_steps as f64 } else { 0.0 };
-
-        let foundation_risk =
-            max_foundation_vib * self.foundation.coupling_factor;
-        let combined_risk = max_interference * 0.6 + foundation_risk * 0.4;
-
-        let (safety_level, recommendation) = if combined_risk < 0.8 {
-            (
-                "安全".to_string(),
-                format!(
-                    "振动干涉与地基耦合均在安全范围内，地基类型{:?}，耦合系数{:.2}。设备可正常运行。",
-                    self.foundation.foundation_type, self.foundation.coupling_factor
-                ),
-            )
-        } else if combined_risk < 1.2 {
-            (
-                "注意".to_string(),
-                format!(
-                    "存在轻度振动干涉，最大地基振动{:.3}。建议监控设备运行状态，关注地基耦合效应。",
-                    max_foundation_vib
-                ),
-            )
-        } else if combined_risk < 1.8 {
-            (
-                "警告".to_string(),
-                format!(
-                    "振动干涉较明显且地基耦合增强。建议调整设备相位差、增加间隔距离或考虑采用钢筋混凝土基础。"
-                ),
-            )
-        } else {
-            (
-                "危险".to_string(),
-                format!(
-                    "存在严重共振与地基耦合风险！最大干涉{:.2}，地基耦合放大{:.2}倍。请立即调整布局、相位或更换桩基础。",
-                    max_interference,
-                    max_foundation_vib.max(1.0)
-                ),
-            )
-        };
-
-        crate::models::VibrationInterferenceResult {
-            analysis_id: Uuid::new_v4().to_string(),
-            device_states,
-            time_series,
-            foundation: self.foundation.clone(),
-            max_interference,
-            avg_interference,
-            max_foundation_vibration: max_foundation_vib,
-            resonance_count,
-            foundation_resonance_count,
-            safety_level,
-            recommendation,
-            timestamp: Utc::now(),
-        }
-    }
-}
 
 // ============ 功能4：公众虚拟凸轮设计体验 ============
 
 impl PoundingOptimizer {
     pub fn test_user_cam_design(
         &self,
-        request: &crate::models::UserCamDesignRequest,
-    ) -> crate::models::UserCamDesignResult {
-        let mut lifts = request.user_defined_lifts.clone();
+        request: &UserCamDesignRequest,
+    ) -> UserCamDesignResult {
+        let designer = VrCamDesigner::new(
+            self.tolerance.clone(),
+            self.dynamics_config.clone(),
+        );
+        designer.test_user_cam_design(request, &self.device)
+    }
+}
 
-        while lifts.len() < 36 {
-            let last = *lifts.last().unwrap_or(&0.0);
-            lifts.push(last);
-        }
-        while lifts.len() > 360 {
-            lifts = lifts.into_iter().step_by(2).collect();
-        }
+pub fn generate_profile(profile_type: &str, base_radius: f64, lift: f64) -> Vec<CamPoint> {
+    let device = DeviceInfo {
+        device_id: String::new(),
+        device_name: String::new(),
+        location: String::new(),
+        cam_base_radius: base_radius,
+        cam_lift: lift,
+        duitou_mass: 25.0,
+        water_flow_rate: 0.05,
+        frame_vibration_threshold: 5.0,
+    };
+    let optimizer = PoundingOptimizer::new(device);
+    optimizer.generate_profile(profile_type, base_radius, lift)
+}
 
-        let profile = self.generate_profile_from_user_lifts(&lifts, request.base_radius);
-        let tolerance_report = self.tolerance.analyze(&profile);
+pub fn evaluate_efficiency(
+    profile: &[CamPoint],
+    grain_type: &str,
+    base_radius: f64,
+    lift: f64,
+) -> f64 {
+    let device = DeviceInfo {
+        device_id: String::new(),
+        device_name: String::new(),
+        location: String::new(),
+        cam_base_radius: base_radius,
+        cam_lift: lift,
+        duitou_mass: 25.0,
+        water_flow_rate: 0.05,
+        frame_vibration_threshold: 5.0,
+    };
+    let optimizer = PoundingOptimizer::new(device);
+    optimizer.evaluate_efficiency(profile, grain_type, base_radius, lift)
+}
 
-        let max_lift = profile.iter().map(|p| p.lift).fold(0.0, f64::max);
-        let safe_lift = max_lift.min(0.3);
+pub fn calculate_average_pounding_force(
+    profile: &[CamPoint],
+    base_radius: f64,
+    lift: f64,
+) -> f64 {
+    let device = DeviceInfo {
+        device_id: String::new(),
+        device_name: String::new(),
+        location: String::new(),
+        cam_base_radius: base_radius,
+        cam_lift: lift,
+        duitou_mass: 25.0,
+        water_flow_rate: 0.05,
+        frame_vibration_threshold: 5.0,
+    };
+    let optimizer = PoundingOptimizer::new(device);
+    optimizer.calculate_average_pounding_force(profile, base_radius, lift)
+}
 
-        let efficiency = self.evaluate_efficiency(&profile, &request.grain_type, request.base_radius, safe_lift);
-        let avg_force = self.calculate_average_pounding_force(&profile, request.base_radius, safe_lift);
-        let impact_energy = self.calculate_impact_energy_per_cycle(safe_lift);
-        let husking_rate = calculate_husking_rate(impact_energy, &request.grain_type, &self.dynamics_config);
-        let breakage_rate = calculate_grain_breakage_rate(impact_energy, avg_force, &self.dynamics_config);
+pub fn calculate_impact_energy_per_cycle(lift: f64) -> f64 {
+    let device = DeviceInfo {
+        device_id: String::new(),
+        device_name: String::new(),
+        location: String::new(),
+        cam_base_radius: 0.15,
+        cam_lift: lift,
+        duitou_mass: 25.0,
+        water_flow_rate: 0.05,
+        frame_vibration_threshold: 5.0,
+    };
+    let optimizer = PoundingOptimizer::new(device);
+    optimizer.calculate_impact_energy_per_cycle(lift)
+}
 
-        let mut feedback = Vec::new();
-        let mut warnings = Vec::new();
-
-        if !tolerance_report.curvature_ok {
-            warnings.push("凸轮曲率半径过小，加工难度大且易磨损。".to_string());
-        } else {
-            feedback.push("曲率半径符合加工要求。".to_string());
-        }
-
-        if !tolerance_report.jerk_ok {
-            warnings.push("加加速度(Jerk)过大，会产生剧烈冲击和噪音。".to_string());
-        } else {
-            feedback.push("运动平稳，冲击较小。".to_string());
-        }
-
-        if !tolerance_report.pressure_angle_ok {
-            warnings.push("压力角过大，传动效率低且易卡死。".to_string());
-        } else {
-            feedback.push("压力角在合理范围内。".to_string());
-        }
-
-        if husking_rate < 0.6 {
-            warnings.push("脱壳率偏低，可能需要增加升程或改进曲线形状。".to_string());
-        } else if husking_rate > 0.9 {
-            feedback.push("脱壳率优秀！".to_string());
-        } else {
-            feedback.push("脱壳率良好。".to_string());
-        }
-
-        if breakage_rate > 0.15 {
-            warnings.push("破碎率过高，谷物损失较大。".to_string());
-        } else if breakage_rate < 0.05 {
-            feedback.push("破碎率控制极佳！".to_string());
-        } else {
-            feedback.push("破碎率在可接受范围。".to_string());
-        }
-
-        let avg_lift = profile.iter().map(|p| p.lift).sum::<f64>() / profile.len() as f64;
-        if avg_lift < 0.02 {
-            warnings.push("升程太小，舂捣效果不佳。".to_string());
-        } else if avg_lift > 0.25 {
-            warnings.push("升程过大，能耗高且可能损坏设备。".to_string());
-        }
-
-        let score = if tolerance_report.overall_feasibility > 0.0 {
-            efficiency * 0.6 + tolerance_report.overall_feasibility * 0.4
-        } else {
-            efficiency * 0.6
-        };
-
-        let grade = if score >= 0.85 {
-            "S级 - 大师级设计".to_string()
-        } else if score >= 0.7 {
-            "A级 - 优秀设计".to_string()
-        } else if score >= 0.55 {
-            "B级 - 良好设计".to_string()
-        } else if score >= 0.4 {
-            "C级 - 合格设计".to_string()
-        } else {
-            "D级 - 需要改进".to_string()
-        };
-
-        crate::models::UserCamDesignResult {
-            design_id: Uuid::new_v4().to_string(),
-            design_name: request.design_name.clone().unwrap_or_else(|| "用户设计".to_string()),
-            overall_efficiency: efficiency,
-            husking_rate,
-            breakage_rate,
-            pounding_force: avg_force,
-            impact_energy,
-            tolerance_report,
-            cam_profile: profile,
-            design_feedback: feedback,
-            safety_warnings: warnings,
-            overall_score: score,
-            grade,
-            timestamp: Utc::now(),
-        }
+pub fn create_test_device() -> DeviceInfo {
+    DeviceInfo {
+        device_id: "test-001".to_string(),
+        device_name: "Test".to_string(),
+        location: "Test".to_string(),
+        cam_base_radius: 0.15,
+        cam_lift: 0.12,
+        duitou_mass: 25.0,
+        water_flow_rate: 0.05,
+        frame_vibration_threshold: 5.0,
     }
 }
 
