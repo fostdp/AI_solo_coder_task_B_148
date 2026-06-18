@@ -1343,4 +1343,481 @@ mod tests {
         assert!(!result.grade.is_empty());
         assert!(!result.cam_profile.is_empty());
     }
+
+    // ============================================================
+    // 功能1测试：凸轮对比 - 冲击能量验证
+    // ============================================================
+
+    #[test]
+    fn test_cam_comparison_impact_energy_normal() {
+        let device = create_test_device();
+        let duitou_mass = device.duitou_mass;
+        let optimizer = PoundingOptimizer::new(device);
+
+        let request = crate::models::CamProfileComparisonRequest {
+            device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            profile_types: vec![
+                "cycloidal".to_string(),
+                "harmonic".to_string(),
+                "trapezoidal".to_string(),
+                "polynomial".to_string(),
+                "involute".to_string(),
+                "circular_arc".to_string(),
+            ],
+            base_radius: 0.15,
+            lift: 0.12,
+        };
+
+        let result = optimizer.compare_cam_profiles(&request);
+
+        assert_eq!(result.results.len(), 6);
+        for r in &result.results {
+            assert!(r.impact_energy > 0.0, "{} 的冲击能量应为正值", r.profile_name_cn);
+            assert!(r.impact_energy < 100.0, "冲击能量不应超过合理范围");
+            assert!(r.husking_rate > 0.0 && r.husking_rate <= 1.0);
+            assert!(r.breakage_rate >= 0.0 && r.breakage_rate < 0.5);
+            let expected_e = 0.5 * duitou_mass * (2.0 * 9.81 * 0.12);
+            assert!((r.impact_energy - expected_e).abs() < 1.0,
+                "冲击能量应接近理论值 m*g*h = {:.2}J, 实际为 {:.2}J", expected_e, r.impact_energy);
+        }
+    }
+
+    #[test]
+    fn test_cam_comparison_impact_energy_boundary() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let request_zero = crate::models::CamProfileComparisonRequest {
+            device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            profile_types: vec!["cycloidal".to_string()],
+            base_radius: 0.15,
+            lift: 0.0,
+        };
+        let result_zero = optimizer.compare_cam_profiles(&request_zero);
+        assert_eq!(result_zero.results[0].impact_energy, 0.0, "升程为0时冲击能量应为0");
+
+        let request_small = crate::models::CamProfileComparisonRequest {
+            device_id: "test-001".to_string(),
+            grain_type: "millet".to_string(),
+            profile_types: vec!["harmonic".to_string()],
+            base_radius: 0.10,
+            lift: 0.01,
+        };
+        let result_small = optimizer.compare_cam_profiles(&request_small);
+        assert!(result_small.results[0].impact_energy > 0.0);
+        assert!(result_small.results[0].impact_energy < 10.0, "极小升程下能量应很小");
+
+        let request_large = crate::models::CamProfileComparisonRequest {
+            device_id: "test-001".to_string(),
+            grain_type: "wheat".to_string(),
+            profile_types: vec!["polynomial".to_string()],
+            base_radius: 0.30,
+            lift: 0.30,
+        };
+        let result_large = optimizer.compare_cam_profiles(&request_large);
+        assert!(result_large.results[0].impact_energy > 50.0, "大升程应有较高能量");
+    }
+
+    #[test]
+    fn test_cam_comparison_impact_energy_abnormal() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let request_unknown = crate::models::CamProfileComparisonRequest {
+            device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            profile_types: vec!["unknown_type_xyz".to_string()],
+            base_radius: 0.15,
+            lift: 0.12,
+        };
+        let result_unknown = optimizer.compare_cam_profiles(&request_unknown);
+        assert_eq!(result_unknown.results.len(), 1);
+        assert!(result_unknown.results[0].impact_energy > 0.0,
+            "未知类型应回退到默认简谐凸轮，仍产生有效能量");
+        assert_eq!(result_unknown.results[0].profile_name_cn, "未知类型");
+
+        let request_empty = crate::models::CamProfileComparisonRequest {
+            device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            profile_types: vec![],
+            base_radius: 0.15,
+            lift: 0.12,
+        };
+        let result_empty = optimizer.compare_cam_profiles(&request_empty);
+        assert_eq!(result_empty.results.len(), 0, "空类型列表应返回空结果");
+        assert_eq!(result_empty.best_profile, "");
+    }
+
+    // ============================================================
+    // 功能2测试：跨时代对比 - 能耗验证
+    // ============================================================
+
+    #[test]
+    fn test_cross_era_energy_consumption_normal() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let request = crate::models::CrossEraComparisonRequest {
+            ancient_device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            modern_motor_power_kw: 2.2,
+            modern_motor_rpm: 1450.0,
+        };
+
+        let result = optimizer.compare_cross_era(&request);
+
+        assert!(result.ancient.energy_consumption_kwh_100kg > 0.0);
+        assert!(result.modern.energy_consumption_kwh_100kg > 0.0);
+        assert!(result.energy_ratio > 0.0, "能耗比应为正值");
+        assert!(result.modern.energy_consumption_kwh_100kg < result.ancient.energy_consumption_kwh_100kg,
+            "现代机器能耗应低于古代水碓");
+        assert!(result.modern.pounding_rate_kg_h > result.ancient.pounding_rate_kg_h,
+            "现代机器生产率应高于古代水碓");
+
+        let energy_100kg_modern = result.modern.energy_consumption_kwh_100kg;
+        assert!(energy_100kg_modern > 0.001 && energy_100kg_modern < 50.0,
+            "现代舂米机每100kg能耗应在合理范围(0.001~50kWh), 实际为 {:.2}", energy_100kg_modern);
+    }
+
+    #[test]
+    fn test_cross_era_energy_consumption_boundary() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let request_min = crate::models::CrossEraComparisonRequest {
+            ancient_device_id: "test-001".to_string(),
+            grain_type: "millet".to_string(),
+            modern_motor_power_kw: 0.5,
+            modern_motor_rpm: 900.0,
+        };
+        let result_min = optimizer.compare_cross_era(&request_min);
+        assert!(result_min.modern.energy_consumption_kwh_100kg > 0.0);
+        assert!(result_min.modern.pounding_rate_kg_h > 0.0);
+
+        let request_max = crate::models::CrossEraComparisonRequest {
+            ancient_device_id: "test-001".to_string(),
+            grain_type: "wheat".to_string(),
+            modern_motor_power_kw: 15.0,
+            modern_motor_rpm: 2900.0,
+        };
+        let result_max = optimizer.compare_cross_era(&request_max);
+        assert!(result_max.modern.pounding_rate_kg_h > result_min.modern.pounding_rate_kg_h,
+            "大功率电机生产率应更高");
+        assert!(result_max.productivity_ratio > result_min.productivity_ratio);
+    }
+
+    #[test]
+    fn test_cross_era_energy_consumption_abnormal() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let request_zero_power = crate::models::CrossEraComparisonRequest {
+            ancient_device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            modern_motor_power_kw: 0.0,
+            modern_motor_rpm: 1450.0,
+        };
+        let result_zero = optimizer.compare_cross_era(&request_zero_power);
+        assert!(result_zero.modern.pounding_rate_kg_h >= 0.0, "零功率不应崩溃");
+        assert!(result_zero.energy_ratio > 0.0, "零功率下能耗比应有效（避免除零）");
+
+        let request_neg_power = crate::models::CrossEraComparisonRequest {
+            ancient_device_id: "test-001".to_string(),
+            grain_type: "rice".to_string(),
+            modern_motor_power_kw: -2.0,
+            modern_motor_rpm: 1450.0,
+        };
+        let result_neg = optimizer.compare_cross_era(&request_neg_power);
+        assert!(result_neg.modern.pounding_rate_kg_h >= 0.0, "负功率不应崩溃");
+
+        let request_unknown_grain = crate::models::CrossEraComparisonRequest {
+            ancient_device_id: "test-001".to_string(),
+            grain_type: "unknown_grain_xyz".to_string(),
+            modern_motor_power_kw: 2.2,
+            modern_motor_rpm: 1450.0,
+        };
+        let result_unknown_grain = optimizer.compare_cross_era(&request_unknown_grain);
+        assert!(result_unknown_grain.ancient.husking_rate >= 0.0, "未知谷物应使用默认参数");
+    }
+
+    // ============================================================
+    // 功能3测试：振动干涉 - 机架响应验证
+    // ============================================================
+
+    #[test]
+    fn test_vibration_frame_response_normal() {
+        let device1 = create_test_device();
+        let device2 = DeviceInfo { device_id: "test-002".to_string(), ..create_test_device() };
+        let device3 = DeviceInfo { device_id: "test-003".to_string(), ..create_test_device() };
+
+        let devices = vec![
+            (device1, 0.0),
+            (device2, std::f64::consts::PI / 2.0),
+            (device3, std::f64::consts::PI),
+        ];
+
+        let analyzer = VibrationInterferenceAnalyzer::new(devices);
+        let result = analyzer.analyze(5.0, 0.01);
+
+        assert_eq!(result.device_states.len(), 3);
+        assert!(!result.time_series.is_empty());
+
+        for ts in &result.time_series {
+            assert!(ts.combined_vibration >= 0.0, "合成振动幅度应为非负");
+            assert!(ts.interference_factor >= 0.0, "干涉因子应为非负");
+            if ts.is_resonance {
+                assert!(ts.interference_factor > 1.5, "共振点干涉因子应超过阈值1.5");
+            }
+        }
+
+        assert!(result.max_interference >= result.avg_interference,
+            "最大干涉不应小于平均干涉");
+        assert!(result.avg_interference >= 0.0);
+        assert!(matches!(result.safety_level.as_str(), "安全" | "注意" | "警告" | "危险"));
+        assert!(!result.recommendation.is_empty());
+
+        for state in &result.device_states {
+            assert!(state.frequency > 0.0, "设备振动频率应为正");
+            assert!(state.amplitude > 0.0, "设备振动幅度应为正");
+        }
+    }
+
+    #[test]
+    fn test_vibration_frame_response_boundary() {
+        let device1 = create_test_device();
+        let device2 = DeviceInfo { device_id: "test-002".to_string(), ..create_test_device() };
+
+        let devices_phase = vec![
+            (device1.clone(), 0.0),
+            (device2.clone(), 0.0),
+        ];
+        let analyzer_phase = VibrationInterferenceAnalyzer::new(devices_phase);
+        let result_phase = analyzer_phase.analyze(3.0, 0.01);
+        assert!(result_phase.max_interference >= 0.05,
+            "同相位应产生可检测的干涉（最大干涉>=0.05），实际为 {:.2}", result_phase.max_interference);
+
+        let devices_anti = vec![
+            (device1.clone(), 0.0),
+            (device2.clone(), std::f64::consts::PI),
+        ];
+        let analyzer_anti = VibrationInterferenceAnalyzer::new(devices_anti);
+        let result_anti = analyzer_anti.analyze(3.0, 0.01);
+        assert!(result_anti.avg_interference >= 0.0, "反相位平均干涉应为非负");
+        assert!(result_anti.max_interference >= 0.0, "反相位最大干涉应为非负");
+
+        let devices_single = vec![(device1, 0.0)];
+        let analyzer_single = VibrationInterferenceAnalyzer::new(devices_single);
+        let result_single = analyzer_single.analyze(5.0, 0.01);
+        assert_eq!(result_single.device_states.len(), 1);
+        assert!(result_single.max_interference >= 0.0 && result_single.max_interference <= 2.0,
+            "单设备干涉因子应在0~2范围");
+        assert!(matches!(result_single.safety_level.as_str(),
+            "安全" | "注意" | "警告" | "危险"), "单设备应返回有效安全等级");
+
+        let devices_coarse = vec![
+            (create_test_device(), 0.0),
+            (DeviceInfo { device_id: "d2".to_string(), ..create_test_device() }, 0.5),
+        ];
+        let analyzer_coarse = VibrationInterferenceAnalyzer::new(devices_coarse);
+        let result_coarse = analyzer_coarse.analyze(1.0, 0.5);
+        assert!(!result_coarse.time_series.is_empty());
+    }
+
+    #[test]
+    fn test_vibration_frame_response_abnormal() {
+        let devices = vec![
+            (create_test_device(), 0.0),
+            (DeviceInfo { device_id: "d2".to_string(), ..create_test_device() }, 1.0),
+        ];
+
+        let analyzer = VibrationInterferenceAnalyzer::new(devices);
+
+        let result_zero = analyzer.analyze(0.0, 0.01);
+        assert_eq!(result_zero.time_series.len(), 0, "零时长应返回空时间序列");
+        assert_eq!(result_zero.max_interference, 0.0);
+
+        let result_neg = analyzer.analyze(-1.0, 0.01);
+        assert_eq!(result_neg.time_series.len(), 0, "负时长应返回空时间序列");
+
+        let result_large_step = analyzer.analyze(10.0, 10.0);
+        assert!(!result_large_step.time_series.is_empty(), "大步长不应崩溃");
+
+        let devices_many: Vec<_> = (0..10).map(|i| {
+            (DeviceInfo {
+                device_id: format!("dev-{}", i),
+                ..create_test_device()
+            }, i as f64 * 0.3)
+        }).collect();
+        let analyzer_many = VibrationInterferenceAnalyzer::new(devices_many);
+        let result_many = analyzer_many.analyze(2.0, 0.05);
+        assert_eq!(result_many.device_states.len(), 10, "10台设备应正确处理");
+        assert!(result_many.max_interference >= 0.0);
+    }
+
+    // ============================================================
+    // 功能4测试：虚拟体验 - 设计自由度验证
+    // ============================================================
+
+    #[test]
+    fn test_user_design_freedom_normal() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let lifts_cycloidal: Vec<f64> = (0..72).map(|i| {
+            let t = i as f64 / 72.0;
+            let pi = std::f64::consts::PI;
+            0.12 * (t - (2.0 * pi * t).sin() / (2.0 * pi))
+        }).collect();
+
+        let request = crate::models::UserCamDesignRequest {
+            user_id: Some("user-001".to_string()),
+            design_name: Some("仿摆线设计".to_string()),
+            base_radius: 0.15,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_cycloidal,
+        };
+
+        let result = optimizer.test_user_cam_design(&request);
+
+        assert_eq!(result.design_name, "仿摆线设计");
+        assert!(result.overall_efficiency > 0.0 && result.overall_efficiency <= 1.0);
+        assert!(result.husking_rate >= 0.0 && result.husking_rate <= 1.0);
+        assert!(result.breakage_rate >= 0.0 && result.breakage_rate < 0.5);
+        assert!(result.pounding_force > 0.0);
+        assert!(result.impact_energy >= 0.0);
+        assert!(!result.grade.is_empty());
+        assert!(!result.cam_profile.is_empty());
+        assert!(result.tolerance_report.overall_feasibility >= 0.0
+            && result.tolerance_report.overall_feasibility <= 1.0);
+
+        assert!(result.grade.starts_with('S')
+            || result.grade.starts_with('A')
+            || result.grade.starts_with('B')
+            || result.grade.starts_with('C')
+            || result.grade.starts_with('D'),
+            "评级应从S/A/B/C/D开始，实际为: {}", result.grade);
+    }
+
+    #[test]
+    fn test_user_design_freedom_boundary() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let lifts_min: Vec<f64> = (0..36).map(|i| {
+            let t = i as f64 / 36.0;
+            0.12 * (1.0 - (std::f64::consts::PI * t).cos()) / 2.0
+        }).collect();
+        let req_min = crate::models::UserCamDesignRequest {
+            user_id: None,
+            design_name: None,
+            base_radius: 0.15,
+            grain_type: "millet".to_string(),
+            user_defined_lifts: lifts_min,
+        };
+        let res_min = optimizer.test_user_cam_design(&req_min);
+        assert!(!res_min.cam_profile.is_empty(), "最小36点应正常工作");
+        assert_eq!(res_min.design_name, "用户设计", "未命名应使用默认名称");
+
+        let lifts_max: Vec<f64> = (0..360).map(|i| {
+            let t = i as f64 / 360.0;
+            0.15 * (1.0 - (std::f64::consts::PI * t).cos()) / 2.0
+        }).collect();
+        let req_max = crate::models::UserCamDesignRequest {
+            user_id: Some("u2".to_string()),
+            design_name: Some("高密度曲线".to_string()),
+            base_radius: 0.15,
+            grain_type: "wheat".to_string(),
+            user_defined_lifts: lifts_max,
+        };
+        let res_max = optimizer.test_user_cam_design(&req_max);
+        assert!(!res_max.cam_profile.is_empty(), "最大360点应正常工作");
+
+        let lifts_extreme: Vec<f64> = (0..72).map(|i| {
+            if i < 36 { 0.3 } else { 0.0 }
+        }).collect();
+        let req_extreme = crate::models::UserCamDesignRequest {
+            user_id: None,
+            design_name: Some("极端阶跃曲线".to_string()),
+            base_radius: 0.10,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_extreme,
+        };
+        let res_extreme = optimizer.test_user_cam_design(&req_extreme);
+        assert!(res_extreme.overall_efficiency > 0.0);
+        assert!(!res_extreme.safety_warnings.is_empty() || !res_extreme.design_feedback.is_empty());
+    }
+
+    #[test]
+    fn test_user_design_freedom_abnormal() {
+        let device = create_test_device();
+        let optimizer = PoundingOptimizer::new(device);
+
+        let lifts_empty: Vec<f64> = vec![];
+        let req_empty = crate::models::UserCamDesignRequest {
+            user_id: None,
+            design_name: Some("空曲线测试".to_string()),
+            base_radius: 0.15,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_empty,
+        };
+        let res_empty = optimizer.test_user_cam_design(&req_empty);
+        assert!(!res_empty.cam_profile.is_empty(), "空曲线应被自动补全至36点");
+        assert_eq!(res_empty.cam_profile.len(), 36);
+
+        let lifts_very_short: Vec<f64> = vec![0.0, 0.05, 0.1];
+        let req_short = crate::models::UserCamDesignRequest {
+            user_id: None,
+            design_name: Some("极短曲线".to_string()),
+            base_radius: 0.15,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_very_short,
+        };
+        let res_short = optimizer.test_user_cam_design(&req_short);
+        assert_eq!(res_short.cam_profile.len(), 36, "3点应被补全至36点");
+
+        let lifts_very_long: Vec<f64> = (0..1000).map(|i| {
+            let t = i as f64 / 1000.0;
+            0.12 * (1.0 - (std::f64::consts::PI * t).cos()) / 2.0
+        }).collect();
+        let req_long = crate::models::UserCamDesignRequest {
+            user_id: None,
+            design_name: Some("超长曲线".to_string()),
+            base_radius: 0.15,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_very_long,
+        };
+        let res_long = optimizer.test_user_cam_design(&req_long);
+        assert!(res_long.cam_profile.len() <= 360, "1000点应被降采样至≤360点");
+
+        let lifts_neg: Vec<f64> = (0..72).map(|i| {
+            let t = i as f64 / 72.0;
+            0.12 * (1.0 - (std::f64::consts::PI * t).cos()) / 2.0 - 0.05
+        }).collect();
+        let req_neg = crate::models::UserCamDesignRequest {
+            user_id: None,
+            design_name: Some("含负值曲线".to_string()),
+            base_radius: 0.15,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_neg,
+        };
+        let res_neg = optimizer.test_user_cam_design(&req_neg);
+        for p in &res_neg.cam_profile {
+            assert!(p.lift >= 0.0, "负升程应被修正为非负，实际为 {}", p.lift);
+        }
+
+        let lifts_zero: Vec<f64> = vec![0.0; 72];
+        let req_zero = crate::models::UserCamDesignRequest {
+            user_id: Some("u-zero".to_string()),
+            design_name: Some("全零升程".to_string()),
+            base_radius: 0.20,
+            grain_type: "rice".to_string(),
+            user_defined_lifts: lifts_zero,
+        };
+        let res_zero = optimizer.test_user_cam_design(&req_zero);
+        assert!(res_zero.impact_energy == 0.0 || res_zero.impact_energy.abs() < 1e-9,
+            "全零升程冲击能量应为0");
+        assert!(!res_zero.safety_warnings.is_empty(), "全零升程应产生警告");
+    }
 }
